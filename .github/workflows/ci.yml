@@ -88,7 +88,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: selftest-"2021.3.16f1"
+          name: selftest-2021.3.16f1
           path: |
             ${{ runner.temp }}/selftest/pipeline.json
             ${{ runner.temp }}/selftest/selftest.json
