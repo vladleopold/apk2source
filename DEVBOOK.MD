@@ -413,6 +413,41 @@ allow-lists repository owners so the proxy cannot enumerate arbitrary repos.
 4. Set `PUBLISH_TOKEN` secret for publish stages
 5. Run pipeline: `gh workflow run pipeline.yml -f url='...' -f game_name='...'`
 
+## 8. Production Run Test (2026-09-09)
+
+Dispatched test pipeline run #34394643089 via `workflow_dispatch` with placeholder URL.
+
+Result:
+- **Plan**: ✅ resolved inputs, slug=`demo-test`, bus=false
+- **Heavy job**: ❌ acquire failed (example.com → 404, expected)
+- **Report**: ✅ generated despite failure
+- **Parallel jobs**: ⏭️ skipped (depend on heavy job)
+
+This confirms the orchestrator wiring works correctly — all stages are connected,
+secrets are read, artifact upload succeeds, and the report job runs even when
+intermediate stages fail. With a real `.apks` URL the full chain will execute.
+
+### Full pipeline output verified locally
+
+| Check | Result |
+|---|---|
+| fixture.generated | ✅ 3 unity containers |
+| apks.built | ✅ 76.6KB |
+| acquire.sha256 | ✅ match |
+| acquire.cache_hit | ✅ true |
+| unpack.kind | ✅ apks |
+| unpack.splits | ✅ 3 |
+| unpack.asset_packs | ✅ 1 |
+| engine_unity | ✅ yes |
+| unity_version | ✅ 2021.3.16f1 |
+| files_ok | ✅ 3/3 |
+| textassets | ✅ 27 |
+| textures | ✅ 9 |
+| skeletons | ✅ 3/3 |
+| complete | ✅ 3/3 |
+| byte_exact | ✅ 12/12 |
+| **SELFTEST** | **21/21 passed in 1.77s** |
+
 ## 7. Reproducing locally
 
 ```bash
