@@ -1,0 +1,131 @@
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "panel/**"
+      - "panel-data/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "*/30 * * * *"   # refresh run history even when nobody pushes
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build panel
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - name: Collect run history from the GitHub API
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p panel-data/runs
+          python3 - <<'PY'
+          import json, os, subprocess, glob, sys
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ.get("GH_TOKEN", "")
+
+          def gh(path):
+              cmd = ["curl", "-sS", "-H", f"Authorization: Bearer {token}",
+                     "-H", "Accept: application/vnd.github+json",
+                     f"https://api.github.com{path}"]
+              try:
+                  out = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+                  return json.loads(out.stdout) if out.stdout else {}
+              except Exception as e:
+                  print(f"::warning::gh {path}: {e}")
+                  return {}
+
+          runs = gh(f"/repos/{repo}/actions/runs?per_page=50") or {}
+          items = runs.get("workflow_runs", []) if isinstance(runs, dict) else []
+          index = []
+          for r in items:
+              index.append({
+                  "run_id": str(r.get("id")),
+                  "name": r.get("name"),
+                  "display_title": r.get("display_title"),
+                  "status": r.get("status"),
+                  "conclusion": r.get("conclusion"),
+                  "event": r.get("event"),
+                  "html_url": r.get("html_url"),
+                  "created_at": r.get("created_at"),
+                  "updated_at": r.get("updated_at"),
+                  "run_started_at": r.get("run_started_at"),
+                  "run_attempt": r.get("run_attempt"),
+                  "head_branch": r.get("head_branch"),
+                  "actor": (r.get("actor") or {}).get("login"),
+              })
+          os.makedirs("panel-data", exist_ok=True)
+          existing = {}
+          p = "panel-data/index.json"
+          if os.path.exists(p):
+              try:
+                  existing = json.load(open(p))
+              except Exception:
+                  existing = {}
+          merged = {str(x["run_id"]): x for x in (existing.get("runs") or [])}
+          for x in index:
+              merged[x["run_id"]] = {**merged.get(x["run_id"], {}), **x}
+          out = sorted(merged.values(), key=lambda r: str(r.get("run_id")), reverse=True)[:200]
+          json.dump({"schema": 1, "repository": repo, "runs": out},
+                    open(p, "w"), indent=2)
+          print(f"panel-data/index.json: {len(out)} runs")
+          PY
+
+      - name: Stage site
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cp -R panel/. _site/
+          mkdir -p _site/data
+          cp -R panel-data/. _site/data/ 2>/dev/null || echo '{"schema":1,"runs":[]}' > _site/data/index.json
+          cat > _site/data/config.json <<JSON
+          {
+            "repository": "${GITHUB_REPOSITORY}",
+            "api_base": "${{ vars.APK2SOURCE_API_BASE }}",
+            "backend": "${{ vars.APK2SOURCE_BACKEND_URL }}",
+            "spine_repo": "${{ vars.APK2SOURCE_SPINE_REPO }}",
+            "source_repo": "${{ vars.APK2SOURCE_SOURCE_REPO }}",
+            "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "run_id": "${GITHUB_RUN_ID}"
+          }
+          JSON
+          python3 -c "import json;print(json.dumps(json.load(open('_site/data/config.json')),indent=2))"
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

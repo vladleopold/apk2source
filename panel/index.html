@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>apk2source — control panel</title>
+<meta name="description" content="Control panel for the apk2source reverse-engineering / asset-extraction pipeline." />
+<link rel="stylesheet" href="styles.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦴</text></svg>" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">⛓</span>
+    <div>
+      <h1>apk2source</h1>
+      <p class="sub">reverse-engineering &amp; asset-extraction combine</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span id="backend-pill" class="pill pill-unknown" title="Backend connectivity">backend: …</span>
+    <span id="repo-pill" class="pill">repo: …</span>
+    <button id="btn-settings" class="btn btn-ghost" type="button" aria-label="Settings">⚙</button>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button class="tab active" data-tab="run" role="tab" aria-selected="true">Run</button>
+  <button class="tab" data-tab="pipeline" role="tab" aria-selected="false">Pipeline</button>
+  <button class="tab" data-tab="history" role="tab" aria-selected="false">History</button>
+  <button class="tab" data-tab="spine" role="tab" aria-selected="false">Spine library</button>
+  <button class="tab" data-tab="docs" role="tab" aria-selected="false">Docs</button>
+</nav>
+
+<main>
+  <!-- ===================== RUN ===================== -->
+  <section id="tab-run" class="panel active">
+    <h2>Start a pipeline run</h2>
+    <p class="hint">
+      Only point this at content you have the right to analyse. Extracted assets are pushed to
+      <code id="cfg-spine-repo">source_spine</code> and <code id="cfg-source-repo">game_source</code>.
+    </p>
+
+    <form id="run-form" class="card form">
+      <label>
+        <span>Payload URL <b class="req">*</b></span>
+        <input name="url" type="url" required placeholder="https://…/game.apks" autocomplete="off" />
+        <small>.apk / .apks / .xapk / .apkm / .aab</small>
+      </label>
+
+      <label>
+        <span>Mirror URL (optional)</span>
+        <input name="url_fallback" type="url" placeholder="https://…" autocomplete="off" />
+      </label>
+
+      <label>
+        <span>Game name <b class="req">*</b></span>
+        <input name="game_name" type="text" required placeholder="my-game" autocomplete="off" />
+        <small>Used as the folder name in the destination repos.</small>
+      </label>
+
+      <label>
+        <span>Expected sha256 (optional)</span>
+        <input name="sha256" type="text" pattern="[0-9a-fA-F]{64}" placeholder="64 hex chars" autocomplete="off" />
+      </label>
+
+      <fieldset class="switches">
+        <legend>Stages</legend>
+        <label class="switch"><input type="checkbox" name="use_cache" checked /><span>Use payload cache</span></label>
+        <label class="switch"><input type="checkbox" name="run_java_decompile" checked /><span>jadx + apktool</span></label>
+        <label class="switch"><input type="checkbox" name="run_il2cpp" checked /><span>Il2CppDumper</span></label>
+        <label class="switch"><input type="checkbox" name="run_assetripper" checked /><span>AssetRipper → Unity project</span></label>
+        <label class="switch"><input type="checkbox" name="run_device_cache" /><span>Android emulator first-run cache capture</span></label>
+        <label class="switch"><input type="checkbox" name="publish_spine" checked /><span>Publish → source_spine</span></label>
+        <label class="switch"><input type="checkbox" name="publish_game_source" /><span>Publish → game_source</span></label>
+      </fieldset>
+
+      <label>
+        <span>Runner</span>
+        <select name="runner">
+          <option value="ubuntu-latest">ubuntu-latest</option>
+          <option value="ubuntu-22.04">ubuntu-22.04</option>
+          <option value="macos-latest">macos-latest</option>
+        </select>
+      </label>
+
+      <label>
+        <span>Max texture side (0 = original)</span>
+        <input name="max_texture_side" type="number" min="0" step="128" value="0" />
+      </label>
+
+      <div class="form-actions">
+        <button class="btn btn-primary" type="submit" id="btn-run">▶ Dispatch pipeline</button>
+        <span id="run-msg" class="msg" role="status" aria-live="polite"></span>
+      </div>
+    </form>
+
+    <div class="card">
+      <h3>Latest run</h3>
+      <div id="latest-run" class="empty">No run data yet.</div>
+    </div>
+  </section>
+
+  <!-- ===================== PIPELINE ===================== -->
+  <section id="tab-pipeline" class="panel">
+    <h2>Pipeline topology</h2>
+    <p class="hint">Levels run left-to-right; boxes on the same level run in parallel.</p>
+    <div id="dag" class="dag"></div>
+
+    <div class="card">
+      <h3>Stage contracts</h3>
+      <div class="table-wrap">
+        <table id="stage-table">
+          <thead><tr><th>#</th><th>Stage</th><th>Workflow job</th><th>Input</th><th>Output</th><th>Runner</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== HISTORY ===================== -->
+  <section id="tab-history" class="panel">
+    <div class="row-between">
+      <h2>Run history</h2>
+      <div class="row">
+        <label class="switch inline"><input type="checkbox" id="auto-refresh" checked /><span>auto-refresh 30s</span></label>
+        <button id="btn-refresh" class="btn" type="button">↻ Refresh</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="table-wrap">
+        <table id="runs-table">
+          <thead><tr>
+            <th>Run</th><th>Workflow</th><th>Title</th><th>Event</th>
+            <th>Status</th><th>Started</th><th>Duration</th><th></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="runs-empty" class="empty">Loading…</div>
+    </div>
+  </section>
+
+  <!-- ===================== SPINE ===================== -->
+  <section id="tab-spine" class="panel">
+    <h2>Spine library</h2>
+    <p class="hint">Contents of the destination repository, read live through the backend.</p>
+    <div class="card">
+      <div class="row">
+        <select id="spine-repo-select"></select>
+        <button id="btn-spine-reload" class="btn" type="button">↻ Reload</button>
+      </div>
+      <div id="spine-tree" class="tree empty">Loading…</div>
+    </div>
+  </section>
+
+  <!-- ===================== DOCS ===================== -->
+  <section id="tab-docs" class="panel">
+    <h2>What this system is</h2>
+    <div class="card prose">
+      <p>
+        <b>apk2source</b> is an automated <em>reverse-engineering &amp; asset-extraction pipeline</em>
+        (industry terms: <b>RE pipeline</b>, <b>binary-to-source reconstruction</b>,
+        <b>asset ripping pipeline</b>). It takes an Android distribution container and walks it down
+        to first-class source assets.
+      </p>
+      <ol>
+        <li><b>Acquire</b> — download <code>.apk/.apks/.xapk/.apkm/.aab</code>, resumable, sha256-verified, cached.</li>
+        <li><b>Unpack</b> — normalise any split-APK container into one merged APK tree.</li>
+        <li><b>Detect</b> — fingerprint the engine (Unity / Unreal / Godot / libGDX / Cocos / Defold) from evidence, not names.</li>
+        <li><b>Device cache</b> — install on an emulator, perform the first run, snapshot-diff the app data dirs to isolate what the app downloaded at runtime.</li>
+        <li><b>Decompile</b> — UnityPy for asset bundles, AssetRipper for project reconstruction, jadx/apktool for Java+resources, Il2CppDumper for IL2CPP.</li>
+        <li><b>Spine</b> — content-sniff skeleton <code>.json</code>/<code>.skel</code>, <code>.atlas</code> and texture pages; pair them; export.</li>
+        <li><b>Publish</b> — push to <code>source_spine</code> and <code>game_source</code> (sparse clone, optional Git LFS).</li>
+      </ol>
+      <p>
+        Full plan: <a href="https://github.com/leaopold/apk2source/blob/main/README.md">README.md</a> ·
+        Session log: <a href="https://github.com/leaopold/apk2source/blob/main/DEVBOOK.MD">DEVBOOK.MD</a>
+      </p>
+      <h3>Legal</h3>
+      <p class="warn">
+        Reverse-engineering tooling is neutral; the <em>input</em> is not. Only run this against builds you
+        own, have written permission to analyse, or that are openly licensed. Extracted art, audio and code
+        from a commercial product remain the property of their publisher — do not republish them.
+      </p>
+    </div>
+  </section>
+</main>
+
+<!-- ===================== SETTINGS MODAL ===================== -->
+<div id="settings" class="modal" hidden>
+  <div class="modal-card">
+    <h2>Settings</h2>
+    <label><span>Backend URL</span><input id="set-backend" type="url" placeholder="https://apk2source-api.vercel.app" /></label>
+    <label><span>Panel access key</span><input id="set-key" type="password" placeholder="shared key for dispatch" autocomplete="off" /></label>
+    <p class="hint">Stored in this browser only (localStorage). The backend holds the GitHub token; it never reaches the page.</p>
+    <div class="form-actions">
+      <button id="set-save" class="btn btn-primary" type="button">Save</button>
+      <button id="set-close" class="btn btn-ghost" type="button">Close</button>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <span>apk2source · MIT · built for GitHub Actions</span>
+  <span id="built-at"></span>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

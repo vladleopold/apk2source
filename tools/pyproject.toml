@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "apk2source"
+version = "1.0.0"
+description = "Reverse-engineering / asset-extraction pipeline for Android builds (APK -> Unity assets -> Spine json/atlas/png)"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "UnityPy>=1.20",
+    "Pillow>=10.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+apk2source = "apk2source.cli:main"
+
+[tool.setuptools]
+packages = ["apk2source"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

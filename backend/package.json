@@ -1,0 +1,15 @@
+{
+  "name": "apk2source-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Serverless proxy for the apk2source GitHub Pages control panel",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel deploy --prod"
+  },
+  "devDependencies": {
+    "vercel": "^39.0.0"
+  }
+}

@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    branches: [main]
+    paths: ["tools/**"]
+  workflow_dispatch:
+    inputs:
+      unity_version:
+        description: "Unity version used to generate the test fixture"
+        default: "2021.3.16f1"
+      game_name:
+        description: "Game slug used for the selftest output tree"
+        default: "apk2source-selftest"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint & compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Byte-compile
+        run: python -m compileall -q tools/apk2source tools/tests
+      - name: Install ruff
+        run: pip install --quiet ruff
+      - name: Ruff (non-blocking style report)
+        continue-on-error: true
+        run: ruff check tools/apk2source --select=E9,F63,F7,F82 --output-format=github
+
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install --quiet -e ./tools pytest
+      - name: pytest
+        run: pytest tools/tests -q --maxfail=5
+
+  selftest:
+    name: E2E selftest (fixture -> spine)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        unity: ["2021.3.16f1", "2019.4.40f1", "2022.3.10f1"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install --quiet -e ./tools
+
+      - name: Run full pipeline selftest
+        run: |
+          apk2source selftest \
+            --work "${{ runner.temp }}/selftest" \
+            --game "${{ github.event.inputs.game_name || 'apk2source-selftest' }}" \
+            --unity "${{ matrix.unity }}"
+
+      - name: Show report
+        if: always()
+        run: |
+          cat "${{ runner.temp }}/selftest/selftest.json" | python -m json.tool | head -80
+
+      - name: Upload selftest artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selftest-${{ matrix.unity }}
+          path: |
+            ${{ runner.temp }}/selftest/pipeline.json
+            ${{ runner.temp }}/selftest/selftest.json
+            ${{ runner.temp }}/selftest/spine/**
+          retention-days: 14
+          if-no-files-found: warn

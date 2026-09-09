@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# pipeline working dirs
+work/
+payload/
+.bus/
+.tools/
+_site/
+*.part
+*.acquire.json
+*.meta.json
+
+# node / vercel
+node_modules/
+.vercel/
+backend/node_modules/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# never commit payloads or extracted third-party content
+*.apk
+*.apks
+*.xapk
+*.apkm
+*.aab
+*.bundle
+*.assets
+*.unity3d
+*.resS
+*.resource
+*.so
+*.dex
+
+# local secrets
+.env
+.env.*
+!.env.example
+access.md
+access.MD

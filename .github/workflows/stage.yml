@@ -1,0 +1,228 @@
+name: Stage
+
+# ============================================================================
+# Single-stage runner.
+#
+# Every pipeline stage is independently dispatchable - this is what the GitHub
+# Pages control panel calls when you want to re-run just one level of the
+# combine instead of the whole chain. It is also `workflow_call`-able, so other
+# workflows (or another repository) can compose it.
+#
+# The payload is restored from, in order:
+#   1. the S3/R2 artifact bus (when APK2SOURCE_S3_* secrets exist)
+#   2. actions/cache keyed on the payload digest
+#   3. a fresh download from `url`
+# ============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "Stage to run"
+        required: true
+        type: choice
+        options:
+          - acquire
+          - unpack
+          - detect
+          - unity
+          - spine
+          - publish-spine
+          - publish-source
+          - selftest
+      url:
+        description: "Payload URL (needed by acquire / cache-miss)"
+        required: false
+        default: ""
+      game_name:
+        description: "Game slug"
+        required: false
+        default: "apk2source-selftest"
+      use_cache:
+        description: "Reuse cached payload"
+        type: boolean
+        default: true
+      runner:
+        description: "Runner label"
+        default: "ubuntu-latest"
+      spine_repo:
+        default: "leaopold/source_spine"
+      source_repo:
+        default: "leaopold/game_source"
+
+  workflow_call:
+    inputs:
+      stage:
+        type: string
+        required: true
+      url:
+        type: string
+        default: ""
+      game_name:
+        type: string
+        default: "apk2source-selftest"
+      use_cache:
+        type: boolean
+        default: true
+      runner:
+        type: string
+        default: "ubuntu-latest"
+      spine_repo:
+        type: string
+        default: "leaopold/source_spine"
+      source_repo:
+        type: string
+        default: "leaopold/game_source"
+    secrets:
+      PUBLISH_TOKEN:
+        required: false
+      APK2SOURCE_S3_ENDPOINT:
+        required: false
+      APK2SOURCE_S3_BUCKET:
+        required: false
+      APK2SOURCE_S3_ACCESS_KEY_ID:
+        required: false
+      APK2SOURCE_S3_SECRET_ACCESS_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  WORK: ${{ github.workspace }}/work
+  PAYLOAD_DIR: ${{ github.workspace }}/payload
+  CACHE_DIR: ${{ github.workspace }}/.payload-cache
+  APK2SOURCE_TOOLS: ${{ github.workspace }}/.tools
+
+jobs:
+  stage:
+    name: "${{ inputs.stage }}"
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 360
+    env:
+      APK2SOURCE_BUS: ${{ secrets.APK2SOURCE_S3_ENDPOINT && 's3' || 'none' }}
+      APK2SOURCE_S3_ENDPOINT: ${{ secrets.APK2SOURCE_S3_ENDPOINT }}
+      APK2SOURCE_S3_BUCKET: ${{ secrets.APK2SOURCE_S3_BUCKET }}
+      APK2SOURCE_S3_ACCESS_KEY_ID: ${{ secrets.APK2SOURCE_S3_ACCESS_KEY_ID }}
+      APK2SOURCE_S3_SECRET_ACCESS_KEY: ${{ secrets.APK2SOURCE_S3_SECRET_ACCESS_KEY }}
+      APK2SOURCE_GITHUB_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: tools/pyproject.toml
+      - run: python -m pip install --quiet -e ./tools
+
+      - name: Restore payload cache
+        if: inputs.use_cache && inputs.stage != 'selftest'
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CACHE_DIR }}
+          key: payload-${{ inputs.game_name }}-${{ inputs.url }}
+          restore-keys: payload-${{ inputs.game_name }}-
+
+      # ---------------- acquire ----------------
+      - name: acquire
+        if: inputs.stage == 'acquire'
+        run: |
+          apk2source acquire --url "${{ inputs.url }}" --out "$PAYLOAD_DIR" \
+            --cache-dir "$CACHE_DIR" --work "$WORK" \
+            ${{ inputs.use_cache && '' || '--no-cache' }}
+
+      # ---------------- unpack ----------------
+      - name: unpack (acquire first if the payload is not cached)
+        if: inputs.stage == 'unpack'
+        run: |
+          set -euo pipefail
+          P="$(find "$PAYLOAD_DIR" -maxdepth 1 -type f ! -name '*.json' | head -1 || true)"
+          if [ -z "$P" ]; then
+            apk2source acquire --url "${{ inputs.url }}" --out "$PAYLOAD_DIR" \
+              --cache-dir "$CACHE_DIR" --work "$WORK"
+            P="$(find "$PAYLOAD_DIR" -maxdepth 1 -type f ! -name '*.json' | head -1)"
+          fi
+          apk2source unpack --input "$P" --out "$WORK/unpacked" --work "$WORK"
+
+      # ---------------- detect ----------------
+      - name: detect
+        if: inputs.stage == 'detect'
+        run: |
+          set -euo pipefail
+          M="$WORK/unpacked/merged"
+          if [ ! -d "$M" ]; then
+            apk2source acquire --url "${{ inputs.url }}" --out "$PAYLOAD_DIR" --cache-dir "$CACHE_DIR" --work "$WORK"
+            apk2source unpack --input "$(find "$PAYLOAD_DIR" -maxdepth 1 -type f ! -name '*.json' | head -1)" --out "$WORK/unpacked" --work "$WORK"
+          fi
+          apk2source detect --merged "$M" --work "$WORK"
+
+      # ---------------- unity ----------------
+      - name: unity extract
+        if: inputs.stage == 'unity'
+        run: |
+          set -euo pipefail
+          M="$WORK/unpacked/merged"
+          if [ ! -d "$M" ]; then
+            apk2source acquire --url "${{ inputs.url }}" --out "$PAYLOAD_DIR" --cache-dir "$CACHE_DIR" --work "$WORK"
+            apk2source unpack --input "$(find "$PAYLOAD_DIR" -maxdepth 1 -type f ! -name '*.json' | head -1)" --out "$WORK/unpacked" --work "$WORK"
+          fi
+          apk2source extract-unity --root "$M" --root "$WORK/device-cache/cache" \
+            --out "$WORK/assets" --work "$WORK"
+
+      # ---------------- spine ----------------
+      - name: spine extract
+        if: inputs.stage == 'spine'
+        run: |
+          set -euo pipefail
+          if [ ! -d "$WORK/assets" ]; then
+            echo "::error::no extracted asset tree; run the 'unity' stage first"
+            exit 1
+          fi
+          apk2source extract-spine --assets "$WORK/assets" --out "$WORK/spine" \
+            --game "${{ inputs.game_name }}" --work "$WORK"
+
+      # ---------------- publish ----------------
+      - name: publish spine
+        if: inputs.stage == 'publish-spine'
+        run: |
+          set -euo pipefail
+          SRC="$WORK/spine/${{ inputs.game_name }}"
+          test -d "$SRC" || { echo "::error::no spine output to publish"; exit 1; }
+          DRY=""; [ -n "${APK2SOURCE_GITHUB_TOKEN:-}" ] || DRY="--dry-run"
+          apk2source publish $DRY --src "$SRC" --repo "${{ inputs.spine_repo }}" \
+            --subdir "${{ inputs.game_name }}" --branch main \
+            --message "apk2source(${{ inputs.game_name }}): spine assets" --workdir "$RUNNER_TEMP/pub"
+
+      - name: publish unity project
+        if: inputs.stage == 'publish-source'
+        run: |
+          set -euo pipefail
+          SRC="$WORK/unity-project/ExportedProject"
+          test -d "$SRC" || { echo "::error::no AssetRipper output to publish"; exit 1; }
+          DRY=""; [ -n "${APK2SOURCE_GITHUB_TOKEN:-}" ] || DRY="--dry-run"
+          apk2source publish $DRY --src "$SRC" --repo "${{ inputs.source_repo }}" \
+            --subdir "${{ inputs.game_name }}" --branch main \
+            --message "apk2source(${{ inputs.game_name }}): reconstructed Unity project" \
+            --workdir "$RUNNER_TEMP/pub"
+
+      # ---------------- selftest ----------------
+      - name: selftest
+        if: inputs.stage == 'selftest'
+        run: apk2source selftest --work "$WORK" --game "${{ inputs.game_name }}"
+
+      - name: Report
+        if: always()
+        run: apk2source report --work "$WORK" --game "${{ inputs.game_name }}" || true
+
+      - name: Upload stage output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage-${{ inputs.stage }}-${{ github.run_number }}
+          path: |
+            ${{ env.WORK }}/pipeline.json
+            ${{ env.WORK }}/selftest.json
+            ${{ env.WORK }}/state/**
+            ${{ env.WORK }}/spine/**
+          retention-days: 14
+          if-no-files-found: warn

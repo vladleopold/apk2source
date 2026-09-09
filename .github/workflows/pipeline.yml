@@ -1,0 +1,709 @@
+name: Pipeline
+
+# ============================================================================
+# apk2source orchestrator.
+#
+#   plan
+#     |
+#     +--> heavy  (acquire -> unpack -> detect -> unity-extract -> spine)
+#     |       |
+#     |       +--> spine-publish      -> source_spine
+#     |       +--> java-decompile     (parallel)
+#     |       +--> il2cpp-decompile   (parallel)
+#     |
+#     +--> device-cache (parallel, macOS + Android emulator, re-acquires)
+#     +--> unity-project (parallel, AssetRipper, re-acquires) -> game_source
+#     |
+#     +--> report -> GitHub Pages panel data
+#
+# Jobs that need the multi-GB payload again (device-cache, unity-project)
+# restore it from actions/cache keyed on the payload digest, or from the
+# optional S3/R2 artifact bus, or re-download it. Nothing large ever travels
+# through GitHub artifacts.
+# ============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Direct download URL of the .apk/.apks/.xapk/.aab"
+        required: true
+      url_fallback:
+        description: "Optional mirror URL"
+        required: false
+        default: ""
+      game_name:
+        description: "Game slug (folder name in source_spine / game_source)"
+        required: true
+      sha256:
+        description: "Optional expected sha256 of the payload"
+        required: false
+        default: ""
+      use_cache:
+        description: "Reuse the cached payload if present"
+        type: boolean
+        default: true
+      run_device_cache:
+        description: "Run the Android emulator first-run cache capture (slow, macOS minutes)"
+        type: boolean
+        default: false
+      run_java_decompile:
+        description: "jadx + apktool on base.apk"
+        type: boolean
+        default: true
+      run_il2cpp:
+        description: "Il2CppDumper (IL2CPP builds only)"
+        type: boolean
+        default: true
+      run_assetripper:
+        description: "AssetRipper -> reconstructable Unity project"
+        type: boolean
+        default: true
+      publish_spine:
+        description: "Push extracted Spine assets to the spine repo"
+        type: boolean
+        default: true
+      publish_game_source:
+        description: "Push the reconstructed Unity project to the source repo"
+        type: boolean
+        default: false
+      spine_repo:
+        description: "Destination repo for Spine assets"
+        default: "leaopold/source_spine"
+      source_repo:
+        description: "Destination repo for the reconstructed Unity project"
+        default: "leaopold/game_source"
+      max_texture_side:
+        description: "Downscale textures above this many px (0 = keep original)"
+        default: "0"
+      runner:
+        description: "Runner label for the heavy job"
+        default: "ubuntu-latest"
+
+  repository_dispatch:
+    types: [apk2source-run]
+
+concurrency:
+  group: pipeline-${{ github.event.inputs.game_name || github.event.client_payload.game_name || 'manual' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  APK2SOURCE_TOOLS: ${{ github.workspace }}/.tools
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  # --------------------------------------------------------------------------
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      url: ${{ steps.resolve.outputs.url }}
+      url_fallback: ${{ steps.resolve.outputs.url_fallback }}
+      game: ${{ steps.resolve.outputs.game }}
+      game_slug: ${{ steps.resolve.outputs.game_slug }}
+      url_hash: ${{ steps.resolve.outputs.url_hash }}
+      sha256: ${{ steps.resolve.outputs.sha256 }}
+      use_cache: ${{ steps.resolve.outputs.use_cache }}
+      runner: ${{ steps.resolve.outputs.runner }}
+      max_texture_side: ${{ steps.resolve.outputs.max_texture_side }}
+      spine_repo: ${{ steps.resolve.outputs.spine_repo }}
+      source_repo: ${{ steps.resolve.outputs.source_repo }}
+      bus_enabled: ${{ steps.bus.outputs.bus_enabled }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - id: resolve
+        name: Resolve inputs (workflow_dispatch or repository_dispatch)
+        env:
+          IN_URL: ${{ github.event.inputs.url }}
+          IN_URL_FALLBACK: ${{ github.event.inputs.url_fallback }}
+          IN_GAME: ${{ github.event.inputs.game_name }}
+          IN_SHA: ${{ github.event.inputs.sha256 }}
+          IN_CACHE: ${{ github.event.inputs.use_cache }}
+          IN_RUNNER: ${{ github.event.inputs.runner }}
+          IN_SPINE_REPO: ${{ github.event.inputs.spine_repo }}
+          IN_SOURCE_REPO: ${{ github.event.inputs.source_repo }}
+          IN_MAXTEX: ${{ github.event.inputs.max_texture_side }}
+          PAYLOAD: ${{ toJSON(github.event.client_payload) }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, re, sys
+
+          def out(k, v):
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+                  fh.write(f"{k}={v}\n")
+
+          payload = {}
+          raw = os.environ.get("PAYLOAD") or ""
+          if raw and raw != "null":
+              try:
+                  payload = json.loads(raw)
+              except Exception:
+                  payload = {}
+
+          def pick(env_name, payload_key, default=""):
+              v = (os.environ.get(env_name) or "").strip()
+              if not v:
+                  v = str(payload.get(payload_key, "") or "").strip()
+              return v or default
+
+          url = pick("IN_URL", "url")
+          game = pick("IN_GAME", "game_name") or pick("IN_GAME", "game")
+          if not url:
+              print("::error::input 'url' is required")
+              sys.exit(1)
+          if not game:
+              print("::error::input 'game_name' is required")
+              sys.exit(1)
+
+          def slug(name, n=80):
+              s = str(name).strip().replace("/", "-").replace("\\", "-")
+              s = re.sub(r"[^A-Za-z0-9._\- ]+", "", s)
+              s = re.sub(r"\s+", "-", s)
+              s = re.sub(r"-{2,}", "-", s).strip("-.")
+              return (s or "unnamed")[:n].strip("-.")
+
+          out("url", url)
+          out("url_fallback", pick("IN_URL_FALLBACK", "url_fallback"))
+          out("game", game)
+          out("game_slug", slug(game))
+          out("url_hash", hashlib.sha256(url.encode()).hexdigest()[:16])
+          out("sha256", pick("IN_SHA", "sha256"))
+          out("use_cache", pick("IN_CACHE", "use_cache", "true"))
+          out("runner", pick("IN_RUNNER", "runner", "ubuntu-latest"))
+          out("max_texture_side", pick("IN_MAXTEX", "max_texture_side", "0"))
+          out("spine_repo", pick("IN_SPINE_REPO", "spine_repo", "leaopold/source_spine"))
+          out("source_repo", pick("IN_SOURCE_REPO", "source_repo", "leaopold/game_source"))
+          print(f"::notice::plan game={slug(game)} url_hash={hashlib.sha256(url.encode()).hexdigest()[:16]}")
+          PY
+
+      - id: bus
+        name: Detect artifact bus
+        env:
+          EP: ${{ secrets.APK2SOURCE_S3_ENDPOINT }}
+          BK: ${{ secrets.APK2SOURCE_S3_BUCKET }}
+          AK: ${{ secrets.APK2SOURCE_S3_ACCESS_KEY_ID }}
+          SK: ${{ secrets.APK2SOURCE_S3_SECRET_ACCESS_KEY }}
+        run: |
+          if [ -n "$EP" ] && [ -n "$BK" ] && [ -n "$AK" ] && [ -n "$SK" ]; then
+            echo "bus_enabled=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::S3/R2 artifact bus configured"
+          else
+            echo "bus_enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No S3/R2 bus configured - heavy stages run in one job; parallel jobs restore the payload from actions/cache."
+          fi
+
+      - name: Summary
+        run: |
+          {
+            echo "### Plan"
+            echo "| key | value |"
+            echo "|---|---|"
+            echo "| game | \`${{ steps.resolve.outputs.game_slug }}\` |"
+            echo "| url | \`${{ steps.resolve.outputs.url }}\` |"
+            echo "| url_hash | \`${{ steps.resolve.outputs.url_hash }}\` |"
+            echo "| cache | \`${{ steps.resolve.outputs.use_cache }}\` |"
+            echo "| artifact bus | \`${{ steps.bus.outputs.bus_enabled }}\` |"
+            echo "| runner | \`${{ steps.resolve.outputs.runner }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # --------------------------------------------------------------------------
+  heavy:
+    name: Acquire / Unpack / Extract / Spine
+    needs: plan
+    runs-on: ${{ needs.plan.outputs.runner }}
+    timeout-minutes: 360
+    outputs:
+      payload_sha256: ${{ steps.acquire.outputs.payload_sha256 }}
+      package: ${{ steps.unpack.outputs.package }}
+      engine: ${{ steps.detect.outputs.engine }}
+      unity_version: ${{ steps.detect.outputs.unity_version }}
+      spine_skeletons: ${{ steps.spine.outputs.spine_skeletons }}
+      spine_complete: ${{ steps.spine.outputs.spine_complete }}
+    env:
+      WORK: ${{ github.workspace }}/work
+      PAYLOAD_DIR: ${{ github.workspace }}/payload
+      CACHE_DIR: ${{ github.workspace }}/.payload-cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: tools/pyproject.toml
+
+      - name: Install toolkit
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet -e ./tools
+          apk2source --help >/dev/null
+
+      - name: Disk before
+        run: df -h "$RUNNER_TEMP" || true
+
+      - name: Restore payload cache
+        if: needs.plan.outputs.use_cache == 'true'
+        id: payload-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CACHE_DIR }}
+          key: payload-${{ needs.plan.outputs.game_slug }}-${{ needs.plan.outputs.sha256 || needs.plan.outputs.url_hash }}
+          restore-keys: |
+            payload-${{ needs.plan.outputs.game_slug }}-
+
+      - name: "Stage 01 - acquire"
+        id: acquire
+        env:
+          APK2SOURCE_BUS: ${{ needs.plan.outputs.bus_enabled == 'true' && 's3' || 'none' }}
+          APK2SOURCE_S3_ENDPOINT: ${{ secrets.APK2SOURCE_S3_ENDPOINT }}
+          APK2SOURCE_S3_BUCKET: ${{ secrets.APK2SOURCE_S3_BUCKET }}
+          APK2SOURCE_S3_ACCESS_KEY_ID: ${{ secrets.APK2SOURCE_S3_ACCESS_KEY_ID }}
+          APK2SOURCE_S3_SECRET_ACCESS_KEY: ${{ secrets.APK2SOURCE_S3_SECRET_ACCESS_KEY }}
+          APK2SOURCE_S3_REGION: ${{ secrets.APK2SOURCE_S3_REGION }}
+        run: |
+          set -euo pipefail
+          ARGS=(--url "${{ needs.plan.outputs.url }}" --out "$PAYLOAD_DIR" --work "$WORK")
+          [ -n "${{ needs.plan.outputs.url_fallback }}" ] && ARGS+=(--url "${{ needs.plan.outputs.url_fallback }}")
+          [ -n "${{ needs.plan.outputs.sha256 }}" ] && ARGS+=(--sha256 "${{ needs.plan.outputs.sha256 }}")
+          if [ "${{ needs.plan.outputs.use_cache }}" = "true" ]; then
+            ARGS+=(--cache-dir "$CACHE_DIR")
+          else
+            ARGS+=(--no-cache)
+          fi
+          apk2source acquire "${ARGS[@]}"
+
+      - name: "Stage 02 - unpack container"
+        id: unpack
+        run: |
+          apk2source unpack --input "${{ steps.acquire.outputs.payload_path }}" \
+                            --out "$WORK/unpacked" --work "$WORK"
+
+      - name: "Stage 02b - engine detection"
+        id: detect
+        run: |
+          apk2source detect --merged "${{ steps.unpack.outputs.merged_dir }}" --work "$WORK"
+
+      - name: Upload base.apk for the Java decompile job
+        if: github.event.inputs.run_java_decompile != 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: base-apk
+          path: ${{ steps.unpack.outputs.splits_dir }}/base*.apk
+          retention-days: 3
+          if-no-files-found: ignore
+
+      - name: Upload IL2CPP inputs
+        if: github.event.inputs.run_il2cpp != 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: il2cpp-input
+          path: |
+            ${{ steps.unpack.outputs.merged_dir }}/lib/**/libil2cpp.so
+            ${{ steps.unpack.outputs.merged_dir }}/assets/bin/Data/Managed/Metadata/global-metadata.dat
+          retention-days: 3
+          if-no-files-found: ignore
+
+      - name: "Stage 04 - Unity asset extraction"
+        id: unity
+        run: |
+          apk2source extract-unity \
+            --root "${{ steps.unpack.outputs.merged_dir }}" \
+            --root "$WORK/device-cache/cache" \
+            --out "$WORK/assets" --work "$WORK" \
+            --max-texture-side "${{ needs.plan.outputs.max_texture_side }}"
+
+      - name: "Stage 05 - Spine extraction"
+        id: spine
+        run: |
+          apk2source extract-spine --assets "$WORK/assets" --out "$WORK/spine" \
+            --game "${{ needs.plan.outputs.game_slug }}" \
+            --package "${{ steps.unpack.outputs.package }}" --work "$WORK" || \
+          echo "::warning::no Spine skeletons found"
+
+      - name: Build report
+        if: always()
+        run: apk2source report --work "$WORK" --game "${{ needs.plan.outputs.game_slug }}" || true
+
+      - name: Upload Spine output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spine-output
+          path: |
+            ${{ env.WORK }}/spine/**
+            ${{ env.WORK }}/pipeline.json
+            ${{ env.WORK }}/state/**
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Disk after
+        if: always()
+        run: df -h "$RUNNER_TEMP" || true
+
+  # --------------------------------------------------------------------------
+  device-cache:
+    name: Device cache capture (API ${{ matrix.api }})
+    if: github.event.inputs.run_device_cache == 'true' || github.event.client_payload.run_device_cache == true
+    needs: [plan, heavy]
+    runs-on: macos-latest
+    timeout-minutes: 180
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [30]
+        arch: [x86_64]
+    env:
+      WORK: ${{ github.workspace }}/work
+      PAYLOAD_DIR: ${{ github.workspace }}/payload
+      CACHE_DIR: ${{ github.workspace }}/.payload-cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: tools/pyproject.toml }
+      - run: python -m pip install --quiet -e ./tools
+
+      - name: Restore payload cache
+        if: needs.plan.outputs.use_cache == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CACHE_DIR }}
+          key: payload-${{ needs.plan.outputs.game_slug }}-${{ needs.plan.outputs.sha256 || needs.plan.outputs.url_hash }}
+
+      - name: Re-acquire payload (cache-first)
+        run: |
+          apk2source acquire --url "${{ needs.plan.outputs.url }}" --out "$PAYLOAD_DIR" \
+            --cache-dir "$CACHE_DIR" --work "$WORK" \
+            ${{ needs.plan.outputs.use_cache == 'true' && '' || '--no-cache' }}
+
+      - name: Unpack splits
+        id: unpack
+        run: apk2source unpack --input "$PAYLOAD_DIR"/* --out "$WORK/unpacked" --work "$WORK"
+
+      - name: Enable KVM/hardware acceleration info
+        run: system_profiler SPHardwareDataType | head -20 || true
+
+      - name: AVD cache
+        uses: actions/cache@v4
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-${{ matrix.api }}-${{ matrix.arch }}
+
+      - name: Create AVD and generate snapshot
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          arch: ${{ matrix.arch }}
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: false
+          script: echo "AVD ready"
+
+      - name: "Stage 03 - install, first-run, capture cache"
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          arch: ${{ matrix.arch }}
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-animations: true
+          script: |
+            adb wait-for-device
+            adb shell settings put global window_animation_scale 0
+            python -m apk2source.cli device-cache \
+              --splits "$WORK/unpacked/splits" \
+              --out "$WORK/device-cache" \
+              --work "$WORK" \
+              --package "${{ needs.heavy.outputs.package }}" \
+              --settle 900
+
+      - name: Upload captured cache
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-cache-api${{ matrix.api }}
+          path: |
+            ${{ env.WORK }}/device-cache/meta/**
+            ${{ env.WORK }}/device-cache/cache/**
+          retention-days: 14
+          if-no-files-found: warn
+
+  # --------------------------------------------------------------------------
+  java-decompile:
+    name: Java / resources decompile
+    if: github.event.inputs.run_java_decompile != 'false'
+    needs: [plan, heavy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: tools/pyproject.toml }
+      - run: python -m pip install --quiet -e ./tools
+
+      - uses: actions/download-artifact@v4
+        with: { name: base-apk, path: apk }
+
+      - name: apktool + jadx
+        run: |
+          set -x
+          APK="$(find apk -name '*.apk' | head -1)"
+          test -n "$APK" || { echo "::warning::no base.apk artifact"; exit 0; }
+          apk2source decompile --merged apk --assets apk --out out --apk "$APK" \
+            --tools apktool --tools jadx || true
+          find out -maxdepth 2 -type d | head -40
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: java-source
+          path: out/**
+          retention-days: 14
+          if-no-files-found: warn
+
+  # --------------------------------------------------------------------------
+  il2cpp-decompile:
+    name: IL2CPP dump
+    if: github.event.inputs.run_il2cpp != 'false'
+    needs: [plan, heavy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: tools/pyproject.toml }
+      - run: python -m pip install --quiet -e ./tools
+
+      - uses: actions/download-artifact@v4
+        with: { name: il2cpp-input, path: merged }
+
+      - name: Il2CppDumper
+        run: |
+          apk2source decompile --merged merged --assets merged --out out \
+            --tools il2cppdumper || echo "::warning::Il2CppDumper did not run"
+          ls -la out/il2cpp 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: il2cpp-dump
+          path: out/**
+          retention-days: 14
+          if-no-files-found: warn
+
+  # --------------------------------------------------------------------------
+  unity-project:
+    name: AssetRipper -> Unity project
+    if: github.event.inputs.run_assetripper != 'false'
+    needs: [plan, heavy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    continue-on-error: true
+    env:
+      WORK: ${{ github.workspace }}/work
+      PAYLOAD_DIR: ${{ github.workspace }}/payload
+      CACHE_DIR: ${{ github.workspace }}/.payload-cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: tools/pyproject.toml }
+      - run: python -m pip install --quiet -e ./tools
+
+      - name: Restore payload cache
+        if: needs.plan.outputs.use_cache == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CACHE_DIR }}
+          key: payload-${{ needs.plan.outputs.game_slug }}-${{ needs.plan.outputs.sha256 || needs.plan.outputs.url_hash }}
+
+      - name: Re-acquire + unpack
+        id: unpack
+        run: |
+          apk2source acquire --url "${{ needs.plan.outputs.url }}" --out "$PAYLOAD_DIR" \
+            --cache-dir "$CACHE_DIR" --work "$WORK" \
+            ${{ needs.plan.outputs.use_cache == 'true' && '' || '--no-cache' }}
+          apk2source unpack --input "$PAYLOAD_DIR"/* --out "$WORK/unpacked" --work "$WORK"
+
+      - name: AssetRipper
+        run: |
+          apk2source decompile --merged "$WORK/unpacked/merged" \
+            --assets "$WORK/unpacked/merged" --out "$WORK/unity-project" \
+            --tools assetripper || echo "::warning::AssetRipper did not run"
+
+      - name: Publish to game_source
+        if: github.event.inputs.publish_game_source == 'true'
+        env:
+          APK2SOURCE_GITHUB_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+        run: |
+          if [ -z "${APK2SOURCE_GITHUB_TOKEN:-}" ]; then
+            echo "::warning::PUBLISH_TOKEN secret is not set - running a dry-run publish"
+            DRY="--dry-run"
+          else
+            DRY=""
+          fi
+          apk2source publish $DRY \
+            --src "$WORK/unity-project/ExportedProject" \
+            --repo "${{ needs.plan.outputs.source_repo }}" \
+            --subdir "${{ needs.plan.outputs.game_slug }}" \
+            --branch main \
+            --message "apk2source(${{ needs.plan.outputs.game_slug }}): reconstructed Unity project" \
+            --workdir "$WORK/publish-src" || echo "::warning::game_source publish failed"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unity-project
+          path: ${{ env.WORK }}/unity-project/**
+          retention-days: 14
+          if-no-files-found: warn
+
+  # --------------------------------------------------------------------------
+  spine-publish:
+    name: Publish -> source_spine
+    if: github.event.inputs.publish_spine != 'false'
+    needs: [plan, heavy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: tools/pyproject.toml }
+      - run: python -m pip install --quiet -e ./tools
+
+      - uses: actions/download-artifact@v4
+        with: { name: spine-output, path: spine-output }
+
+      - name: Publish
+        id: pub
+        env:
+          APK2SOURCE_GITHUB_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          SRC="spine-output/work/spine/${{ needs.plan.outputs.game_slug }}"
+          if [ ! -d "$SRC" ]; then
+            SRC="$(dirname "$(find spine-output -name _index.json | head -1)")"
+          fi
+          if [ -z "${APK2SOURCE_GITHUB_TOKEN:-}" ]; then
+            echo "::warning::PUBLISH_TOKEN secret is not set - running a dry-run publish"
+            DRY="--dry-run"
+          else
+            DRY=""
+          fi
+          apk2source publish --src "$SRC" \
+            --repo "${{ needs.plan.outputs.spine_repo }}" \
+            --subdir "${{ needs.plan.outputs.game_slug }}" \
+            --branch main \
+            --message "apk2source(${{ needs.plan.outputs.game_slug }}): ${{ needs.heavy.outputs.spine_skeletons }} spine skeletons" \
+            --workdir "$RUNNER_TEMP/publish" $DRY
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Published to \`${{ needs.plan.outputs.spine_repo }}\`"
+            echo "- skeletons: **${{ needs.heavy.outputs.spine_skeletons }}**"
+            echo "- complete: **${{ needs.heavy.outputs.spine_complete }}**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # --------------------------------------------------------------------------
+  report:
+    name: Report + Pages data
+    if: always()
+    needs: [plan, heavy, device-cache, java-decompile, il2cpp-decompile, unity-project, spine-publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: tools/pyproject.toml }
+      - run: python -m pip install --quiet -e ./tools
+
+      - uses: actions/download-artifact@v4
+        with: { name: spine-output, path: spine-output }
+        continue-on-error: true
+
+      - name: Assemble report
+        run: |
+          set -euo pipefail
+          mkdir -p panel-data/runs
+          WORKDIR="spine-output/work"
+          [ -d "$WORKDIR" ] || WORKDIR="."
+          apk2source report --work "$WORKDIR" \
+            --game "${{ needs.plan.outputs.game_slug }}" \
+            --run-id "${{ github.run_id }}" \
+            --out "panel-data/runs/${{ github.run_id }}.json" || true
+          python3 - <<'PY'
+          import json, os, glob
+          runs = []
+          for f in sorted(glob.glob("panel-data/runs/*.json")):
+              try:
+                  d = json.load(open(f))
+              except Exception:
+                  continue
+              runs.append({
+                  "run_id": d.get("run_id"),
+                  "game": d.get("game"),
+                  "generated_iso": d.get("generated_iso"),
+                  "summary": d.get("summary", {}),
+              })
+          runs.sort(key=lambda r: str(r.get("run_id")), reverse=True)
+          os.makedirs("panel-data", exist_ok=True)
+          json.dump({"schema": 1, "runs": runs[:200]},
+                    open("panel-data/index.json", "w"), indent=2)
+          print(f"panel-data/index.json: {len(runs)} runs")
+          PY
+
+      - name: Commit panel data
+        run: |
+          git config user.name "apk2source-bot"
+          git config user.email "apk2source-bot@users.noreply.github.com"
+          git add panel-data
+          if git diff --cached --quiet; then
+            echo "no panel data changes"
+          else
+            git commit -m "panel: run ${{ github.run_id }} (${{ needs.plan.outputs.game_slug }})"
+            git push origin HEAD:main || echo "::warning::push of panel data failed"
+          fi
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## apk2source run ${{ github.run_id }}"
+            echo ""
+            echo "| stage | result |"
+            echo "|---|---|"
+            echo "| heavy | ${{ needs.heavy.result }} |"
+            echo "| device-cache | ${{ needs['device-cache'].result }} |"
+            echo "| java-decompile | ${{ needs['java-decompile'].result }} |"
+            echo "| il2cpp-decompile | ${{ needs['il2cpp-decompile'].result }} |"
+            echo "| unity-project | ${{ needs['unity-project'].result }} |"
+            echo "| spine-publish | ${{ needs['spine-publish'].result }} |"
+            echo ""
+            echo "- engine: \`${{ needs.heavy.outputs.engine }}\`"
+            echo "- unity: \`${{ needs.heavy.outputs.unity_version }}\`"
+            echo "- package: \`${{ needs.heavy.outputs.package }}\`"
+            echo "- payload sha256: \`${{ needs.heavy.outputs.payload_sha256 }}\`"
+            echo "- **spine skeletons: ${{ needs.heavy.outputs.spine_skeletons }} (${{ needs.heavy.outputs.spine_complete }} complete)**"
+          } >> "$GITHUB_STEP_SUMMARY"
