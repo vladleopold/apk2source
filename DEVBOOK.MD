@@ -395,6 +395,24 @@ allow-lists repository owners so the proxy cannot enumerate arbitrary repos.
 
 ---
 
+## 6. CI / Deployment Status
+
+| Item | Status | Notes |
+|---|---|---|
+| CI (ci.yml) | ✅ PASSED | Run 34384946613, selftest + unit tests pass |
+| Code deployed | ✅ | `vladleopold/apk2source` main branch |
+| Pages | ⚠️ Manual enable needed | Settings → Pages → build_type: workflow |
+| Backend | ⚠️ Static mode only | Vercel token invalid; worker.js ready for CF Workers |
+| PUBLISH_TOKEN | ⚠️ Set in repo secrets | Required for publish stages |
+| Destination repos | ⚠️ Create under vladleopold | source_spine, game_source |
+
+### Next steps to full operation
+1. Enable Pages in repo settings (GitHub Actions build type)
+2. Add `PANEL_ACCESS_KEY` secret (`openssl rand -hex 24`)
+3. Deploy `backend/worker.js` to Cloudflare Workers or skip (panel works static)
+4. Set `PUBLISH_TOKEN` secret for publish stages
+5. Run pipeline: `gh workflow run pipeline.yml -f url='...' -f game_name='...'`
+
 ## 7. Reproducing locally
 
 ```bash

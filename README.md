@@ -356,8 +356,8 @@ See [`docs/LEGAL.md`](docs/LEGAL.md).
 
 | Thing | Where |
 |---|---|
-| Pipeline repo | https://github.com/leaopold/apk2source |
-| Spine output | https://github.com/leaopold/source_spine |
-| Unity project output | https://github.com/leaopold/game_source |
+| Pipeline repo | https://github.com/vladleopold/apk2source |
+| Spine output | https://github.com/vladleopold/source_spine |
+| Unity project output | https://github.com/vladleopold/game_source |
 | Control panel | repo → Settings → Pages (branch `main`, `/panel` via `pages.yml`) |
 | Backend | Vercel (URL recorded in `panel-data/config.json` at build time) |
