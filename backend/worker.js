@@ -124,55 +124,6 @@ export default {
     }
 
     // ---------------------------------------------------------------- automation
-    if (path === "automation/status") {
-      try {
-        const [wfData, runsData] = await Promise.all([
-          gh(`/repos/${REPO}/actions/workflows`, {}, GITHUB_TOKEN),
-          gh(`/repos/${REPO}/actions/runs?per_page=10&branch=main`, {}, GITHUB_TOKEN),
-        ])
-        const workflows = (wfData.workflows || []).map(w => ({ name: w.name, state: w.state, path: w.path }))
-        const recent = (runsData.workflow_runs || []).map(r => ({
-          id: r.id, name: r.name, status: r.status, conclusion: r.conclusion,
-          event: r.event, html_url: r.html_url, created_at: r.created_at
-        }))
-        return corsResponse({ ok: true, repository: REPO, generated_at: new Date().toISOString(),
-          workflows, recent_runs: recent }, {})
-      } catch (e) { return fail(e.message, e.status || 500) }
-    }
-
-    // trigger (alias for automation/selftest)
-    if (path === "automation/selftest" || path === "trigger") {
-      if (request.method !== "POST") return fail("POST only", 405)
-      if (!GITHUB_TOKEN) return fail("no GITHUB_TOKEN configured", 503)
-      if (PANEL_KEY && !authorized(request, PANEL_KEY)) return fail("invalid X-Panel-Key", 401)
-      const body = await request.json().catch(() => ({}))
-      const game = (body.game_name || "apk2source-selftest").slice(0, 120)
-      try {
-        const r = await fetch(`${GH_API}/repos/${REPO}/actions/workflows/automation.yml/dispatches`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, "Content-Type": "application/json",
-            "Accept": "application/vnd.github+json", "User-Agent": "apk2source-worker" },
-          body: JSON.stringify({ ref: (body.ref || "main").slice(0, 100),
-            inputs: { action: "selftest", game_name: game } })
-        })
-        if (!r.ok) {
-          const t = await r.text()
-          let msg = t.slice(0, 500)
-          try { msg = JSON.parse(t).message || msg } catch {}
-          return fail(`GitHub API ${r.status}: ${msg}`, r.status)
-        }
-        let runUrl = null, runId = null
-        try {
-          await new Promise(res => setTimeout(res, 2500))
-          const data = await gh(`/repos/${REPO}/actions/runs?per_page=5&event=workflow_dispatch`, {}, GITHUB_TOKEN)
-          const hit = (data.workflow_runs || [])[0]
-          if (hit) { runUrl = hit.html_url; runId = String(hit.id) }
-        } catch { /* non-fatal */ }
-        return corsResponse({ ok: true, action: "selftest", game_name: game, run_id: runId, run_url: runUrl }, {})
-      } catch (e) { return fail(e.message, e.status || 500) }
-    }
-
-    if (path === "automation/notify") {
       if (request.method !== "POST") return fail("POST only", 405)
       if (!GITHUB_TOKEN) return fail("no GITHUB_TOKEN configured", 503)
       if (PANEL_KEY && !authorized(request, PANEL_KEY)) return fail("invalid X-Panel-Key", 401)
@@ -201,7 +152,6 @@ export default {
       const STAGES = new Set(["selftest-run", "status-check", "pipeline-run", "stage-run"])
       if (!STAGES.has(action)) return fail(`unknown webhook action: ${action}`, 400)
       try {
-        await gh(`/repos/${REPO}/actions/workflows/automation.yml/dispatches`, GITHUB_TOKEN, {
           method: "POST", body: { ref: (body.ref || "main").slice(0, 100),
             inputs: { action: action === "selftest-run" ? "selftest" : action === "pipeline-run" ? "full-pipeline" : "status",
               game_name: String(body.game_name || "apk2source-selftest").slice(0, 120) } }
