@@ -28,6 +28,7 @@
   <button class="tab active" data-tab="run" role="tab" aria-selected="true">Run</button>
   <button class="tab" data-tab="pipeline" role="tab" aria-selected="false">Pipeline</button>
   <button class="tab" data-tab="history" role="tab" aria-selected="false">History</button>
+  <button class="tab" data-tab="automation" role="tab" aria-selected="false">Automation</button>
   <button class="tab" data-tab="spine" role="tab" aria-selected="false">Spine library</button>
   <button class="tab" data-tab="docs" role="tab" aria-selected="false">Docs</button>
 </nav>
@@ -138,6 +139,45 @@
         </table>
       </div>
       <div id="runs-empty" class="empty">Loading…</div>
+    </div>
+  </section>
+
+  <!-- ===================== AUTOMATION ===================== -->
+  <section id="tab-automation" class="panel">
+    <h2>Automation</h2>
+    <p class="hint">Automatic CI/CD control surface — no manual clicks on GitHub Actions UI.</p>
+
+    <div class="card">
+      <h3>Quick actions</h3>
+      <div class="row">
+        <button class="btn btn-primary" id="btn-selftest" type="button">▶ Run selftest</button>
+        <button class="btn" id="btn-status" type="button">📊 System status</button>
+        <button class="btn btn-ghost" id="btn-notify-test" type="button">Telegram test</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>System status</h3>
+      <div id="automation-status" class="empty">No data yet. Press “System status”.</div>
+    </div>
+
+    <div class="card">
+      <h3>Notify</h3>
+      <p class="hint">Send a status ping to a Telegram bot, Slack webhook, or any HTTP endpoint.</p>
+      <form id="notify-form" class="form">
+        <label>
+          <span>Webhook URL</span>
+          <input name="url" type="url" placeholder="https://api.telegram.org/bot<TOKEN>/sendMessage" autocomplete="off" />
+        </label>
+        <label>
+          <span>Message</span>
+          <input name="text" type="text" placeholder="apk2source: pipeline ready" autocomplete="off" />
+        </label>
+        <div class="form-actions">
+          <button class="btn" type="submit">Send</button>
+          <span id="notify-msg" class="msg" role="status" aria-live="polite"></span>
+        </div>
+      </form>
     </div>
   </section>
 

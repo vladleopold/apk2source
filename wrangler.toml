@@ -1,0 +1,4 @@
+name = "apk2source-api"
+main = "backend/worker.js"
+compatibility_date = "2025-02-01"
+workers_dev = true
