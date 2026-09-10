@@ -1,4 +1,4 @@
-name = "apk2source-api"
+name = "apk2source-api-v3"
 main = "backend/worker.js"
 compatibility_date = "2025-02-01"
 compatibility_flags = ["nodejs_compat"]
