@@ -295,6 +295,24 @@ export default {
           token_has_space: GITHUB_TOKEN ? GITHUB_TOKEN.includes(" ") : false,
         }, {})
       }
+
+      if (path === "debug/user") {
+        const r = await fetch(`${GH_API}/user`, {
+          headers: {
+            Authorization: `Bearer ${GITHUB_TOKEN}`,
+            Accept: "application/vnd.github+json",
+            "User-Agent": "apk2source-worker",
+            "X-GitHub-Api-Version": "2022-11-28"
+          }
+        })
+        const text = await r.text()
+        return corsResponse({
+          ok: r.ok,
+          status: r.status,
+          body: text.slice(0, 500),
+          headers: Object.fromEntries(r.headers.entries()),
+        }, {})
+      }
     // Workflow dispatch
     if (path === "trigger") {
       if (request.method !== "POST") return fail("POST only", 405)
