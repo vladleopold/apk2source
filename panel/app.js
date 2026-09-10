@@ -418,7 +418,7 @@
         // Try backend first
         if (state.backendOk) {
           const r = await api("/api/trigger", { method: "POST", body: { workflow: "pipeline.yml", inputs } });
-          setMsg(msg, `Dispatched. ${r.run_url ? \`Tracking \${r.run_url}\` : "Check the History tab in ~10s."}`, "ok");
+          setMsg(msg, `Dispatched. ${r.run_url ? `Tracking \${r.run_url}` : "Check the History tab in ~10s."}`, "ok");
           setTimeout(loadRuns, 8000);
         } else {
           // Open GitHub Actions UI directly
