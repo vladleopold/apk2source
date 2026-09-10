@@ -6,7 +6,7 @@ const GH_API = "https://api.github.com"
 export default {
   async fetch(request, env) {
     try {
-      const GITHUB_TOKEN = env.GITHUB_TOKEN || ""
+      const GITHUB_TOKEN = env.GH_TOKEN || ""
       const PANEL_KEY = env.PANEL_ACCESS_KEY || ""
       const REPO = env.APK2SOURCE_REPO || "vladleopold/apk2source"
       const url = new URL(request.url)
