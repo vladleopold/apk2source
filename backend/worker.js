@@ -259,6 +259,42 @@ export default {
           token_prefix: GITHUB_TOKEN ? GITHUB_TOKEN.slice(0, 10) + "..." : null,
         }, {})
       }
+
+      if (path === "debug/headers") {
+        const body = await request.json().catch(() => ({}))
+        const workflow = (body.workflow || "pipeline.yml").replace(/[^\w.\-]/g, "")
+        const inputs = {}
+        const ALLOWED = new Set(["url","url_fallback","game_name","sha256","use_cache","run_device_cache",
+          "run_java_decompile","run_il2cpp","run_assetripper","publish_spine","publish_game_source",
+          "spine_repo","source_repo","max_texture_side","runner","stage"])
+        for (const [k,v] of Object.entries(body.inputs || {})) {
+          if (!ALLOWED.has(k)) continue
+          inputs[k] = typeof v === "boolean" ? String(v) : String(v).slice(0, 2000)
+        }
+        const dispatchBody = { ref: (body.ref || "main").slice(0, 100), inputs }
+        const headers = {
+          Authorization: `Bearer ${GITHUB_TOKEN}`,
+          Accept: "application/vnd.github+json",
+          "Content-Type": "application/json",
+          "User-Agent": "apk2source-worker",
+          "X-GitHub-Api-Version": "2022-11-28"
+        }
+        return corsResponse({
+          ok: true,
+          url: `${GH_API}/repos/${REPO}/actions/workflows/${workflow}/dispatches`,
+          headers: {
+            Authorization: `Bearer ${GITHUB_TOKEN.slice(0, 10)}...`,
+            Accept: headers.Accept,
+            "Content-Type": headers["Content-Type"],
+            "User-Agent": headers["User-Agent"],
+            "X-GitHub-Api-Version": headers["X-GitHub-Api-Version"]
+          },
+          body: JSON.stringify(dispatchBody),
+          token_full_length: GITHUB_TOKEN ? GITHUB_TOKEN.length : 0,
+          token_has_newline: GITHUB_TOKEN ? GITHUB_TOKEN.includes("\n") : false,
+          token_has_space: GITHUB_TOKEN ? GITHUB_TOKEN.includes(" ") : false,
+        }, {})
+      }
     // Workflow dispatch
     if (path === "trigger") {
       if (request.method !== "POST") return fail("POST only", 405)
