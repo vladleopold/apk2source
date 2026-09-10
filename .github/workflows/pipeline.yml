@@ -545,8 +545,8 @@ jobs:
             ${{ needs.plan.outputs.use_cache == 'true' && '' || '--no-cache' }}
           APK="$(find "$PAYLOAD_DIR" -maxdepth 1 \
             \( -name "*.apk" -o -name "*.apks" -o -name "*.xapk" -o -name "*.aab" -o -name "*.apkm" \
-          ) -type f | head -1)"
-          test -n "$APK" || { echo "::error::no APK found"; exit 1; }'
+            \) -type f | head -1)"
+          test -n "$APK" || { echo "::error::no APK found"; exit 1; }
           apk2source unpack --input "$APK" --out "$WORK/unpacked" --work "$WORK"
 
       - name: AssetRipper
