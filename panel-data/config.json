@@ -1,0 +1,7 @@
+{
+  "repository": "vladleopold/apk2source",
+  "spine_repo": "leaopold/source_spine",
+  "source_repo": "leaopold/game_source",
+  "backend": "https://apk2source-api-v3.leopolds2010.workers.dev",
+  "built_at": "2026-09-11T00:00:00Z"
+}
