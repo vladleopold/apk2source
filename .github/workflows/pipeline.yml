@@ -298,22 +298,18 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: base-apk
-          path: |
-            ${{ steps.unpack.outputs.splits_dir }}/base.apk
-            ${{ steps.unpack.outputs.splits_dir }}/base-master.apk
+          path: ${{ steps.unpack.outputs.splits_dir }}
           retention-days: 3
-          if-no-files-found: ignore
+          if-no-files-found: warn
 
       - name: Upload IL2CPP inputs
         if: github.event.inputs.run_il2cpp != 'false'
         uses: actions/upload-artifact@v4
         with:
           name: il2cpp-input
-          path: |
-            ${{ steps.unpack.outputs.merged_dir }}/lib/**/*.so
-            ${{ steps.unpack.outputs.merged_dir }}/assets/**/*.dat
+          path: ${{ steps.unpack.outputs.merged_dir }}
           retention-days: 3
-          if-no-files-found: ignore
+          if-no-files-found: warn
 
       - name: "Stage 04 - Unity asset extraction"
         id: unity
