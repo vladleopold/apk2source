@@ -5,21 +5,22 @@ const GH_API = "https://api.github.com"
 
 export default {
   async fetch(request, env) {
-    const GITHUB_TOKEN = env.GITHUB_TOKEN || ""
-    const PANEL_KEY = env.PANEL_ACCESS_KEY || ""
-    const REPO = env.APK2SOURCE_REPO || "vladleopold/apk2source"
-    const url = new URL(request.url)
-    const path = url.pathname.replace(/^\/api\//, "")
+    try {
+      const GITHUB_TOKEN = env.GITHUB_TOKEN || ""
+      const PANEL_KEY = env.PANEL_ACCESS_KEY || ""
+      const REPO = env.APK2SOURCE_REPO || "vladleopold/apk2source"
+      const url = new URL(request.url)
+      const path = url.pathname.replace(/^\/api\//, "")
 
-    // CORS preflight
-    if (request.method === "OPTIONS") {
-      return corsResponse(null, {})
-    }
+      // CORS preflight
+      if (request.method === "OPTIONS") {
+        return corsResponse(null, {})
+      }
 
-    // Health check
-    if (path === "health") {
-      return corsResponse({ ok: true, service: "apk2source-worker", time: new Date().toISOString() }, {})
-    }
+      // Health check
+      if (path === "health") {
+        return corsResponse({ ok: true, service: "apk2source-worker", time: new Date().toISOString() }, {})
+      }
 
     // Config
     if (path === "config") {
@@ -37,7 +38,7 @@ export default {
     if (path === "runs") {
       const perPage = Math.min(parseInt(url.searchParams.get("per_page") || "50"), 100)
       try {
-        const data = await gh(`/repos/${REPO}/actions/runs?per_page=${perPage}`, GITHUB_TOKEN)
+        const data = await gh(`/repos/${REPO}/actions/runs?per_page=${perPage}`, {}, GITHUB_TOKEN)
         const runs = (data.workflow_runs || []).map(r => ({
           run_id: String(r.id), id: r.id, name: r.name, display_title: r.display_title,
           status: r.status, conclusion: r.conclusion, event: r.event, html_url: r.html_url,
@@ -53,8 +54,8 @@ export default {
       const runId = path.split("/")[1]
       try {
         const [run, jobsData] = await Promise.all([
-          gh(`/repos/${REPO}/actions/runs/${runId}`, GITHUB_TOKEN),
-          gh(`/repos/${REPO}/actions/runs/${runId}/jobs?per_page=100`, GITHUB_TOKEN),
+          gh(`/repos/${REPO}/actions/runs/${runId}`, {}, GITHUB_TOKEN),
+          gh(`/repos/${REPO}/actions/runs/${runId}/jobs?per_page=100`, {}, GITHUB_TOKEN),
         ])
         const jobs = (jobsData.jobs || []).map(j => ({
           id: j.id, name: j.name, status: j.status, conclusion: j.conclusion,
@@ -76,7 +77,7 @@ export default {
       const runId = url.searchParams.get("run_id")
       if (!runId) return fail("run_id required", 400)
       try {
-        const data = await gh(`/repos/${REPO}/actions/runs/${runId}/artifacts?per_page=100`, GITHUB_TOKEN)
+        const data = await gh(`/repos/${REPO}/actions/runs/${runId}/artifacts?per_page=100`, {}, GITHUB_TOKEN)
         return corsResponse({ ok: true, total: data.total_count,
           artifacts: (data.artifacts || []).map(a => ({
             id: a.id, name: a.name, size_in_bytes: a.size_in_bytes, expired: a.expired,
@@ -111,7 +112,7 @@ export default {
       const allowed = new Set([env.APK2SOURCE_SPINE_REPO, env.APK2SOURCE_SOURCE_REPO, REPO])
       if (!allowed.has(repo)) return fail(`repo not allowed: ${repo}`, 403)
       try {
-        const data = await gh(`/repos/${repo}/contents/${encodeURIComponent(treePath)}?ref=${encodeURIComponent(ref)}`, GITHUB_TOKEN)
+        const data = await gh(`/repos/${repo}/contents/${encodeURIComponent(treePath)}?ref=${encodeURIComponent(ref)}`, {}, GITHUB_TOKEN)
         const list = Array.isArray(data) ? data : [data]
         return corsResponse({ ok: true, repo, path: treePath, ref,
           entries: list.map(e => ({ name: e.name, path: e.path, type: e.type === "dir" ? "dir" : "file",
@@ -126,8 +127,8 @@ export default {
     if (path === "automation/status") {
       try {
         const [wfData, runsData] = await Promise.all([
-          gh(`/repos/${REPO}/actions/workflows`, GITHUB_TOKEN),
-          gh(`/repos/${REPO}/actions/runs?per_page=10&branch=main`, GITHUB_TOKEN),
+          gh(`/repos/${REPO}/actions/workflows`, {}, GITHUB_TOKEN),
+          gh(`/repos/${REPO}/actions/runs?per_page=10&branch=main`, {}, GITHUB_TOKEN),
         ])
         const workflows = (wfData.workflows || []).map(w => ({ name: w.name, state: w.state, path: w.path }))
         const recent = (runsData.workflow_runs || []).map(r => ({
@@ -142,7 +143,7 @@ export default {
     if (path === "automation/selftest") {
       if (request.method !== "POST") return fail("POST only", 405)
       if (!GITHUB_TOKEN) return fail("no GITHUB_TOKEN configured", 503)
-      if (PANEL_KEY && !authorized(request)) return fail("invalid X-Panel-Key", 401)
+      if (PANEL_KEY && !authorized(request, PANEL_KEY)) return fail("invalid X-Panel-Key", 401)
       const body = await request.json()
       const game = (body.game_name || "apk2source-selftest").slice(0, 120)
       try {
@@ -153,7 +154,7 @@ export default {
         let runUrl = null, runId = null
         try {
           await new Promise(r => setTimeout(r, 2500))
-          const data = await gh(`/repos/${REPO}/actions/runs?per_page=5&event=workflow_dispatch`, GITHUB_TOKEN)
+          const data = await gh(`/repos/${REPO}/actions/runs?per_page=5&event=workflow_dispatch`, {}, GITHUB_TOKEN)
           const hit = (data.workflow_runs || [])[0]
           if (hit) { runUrl = hit.html_url; runId = String(hit.id) }
         } catch { /* non-fatal */ }
@@ -164,7 +165,7 @@ export default {
     if (path === "automation/notify") {
       if (request.method !== "POST") return fail("POST only", 405)
       if (!GITHUB_TOKEN) return fail("no GITHUB_TOKEN configured", 503)
-      if (PANEL_KEY && !authorized(request)) return fail("invalid X-Panel-Key", 401)
+      if (PANEL_KEY && !authorized(request, PANEL_KEY)) return fail("invalid X-Panel-Key", 401)
       const body = await request.json()
       const url = (body.url || "").slice(0, 2000)
       const text = String(body.text || body.message || "apk2source status").slice(0, 4096)
@@ -199,11 +200,70 @@ export default {
       } catch (e) { return fail(e.message, e.status || 500) }
     }
 
+
+
+      if (path === "debug/dispatch") {
+        const body = await request.json().catch(() => ({}))
+        const workflow = (body.workflow || "pipeline.yml").replace(/[^\w.\-]/g, "")
+        const inputs = {}
+        const ALLOWED = new Set(["url","url_fallback","game_name","sha256","use_cache","run_device_cache",
+          "run_java_decompile","run_il2cpp","run_assetripper","publish_spine","publish_game_source",
+          "spine_repo","source_repo","max_texture_side","runner","stage"])
+        for (const [k,v] of Object.entries(body.inputs || {})) {
+          if (!ALLOWED.has(k)) continue
+          inputs[k] = typeof v === "boolean" ? String(v) : String(v).slice(0, 2000)
+        }
+        const dispatchBody = { ref: (body.ref || "main").slice(0, 100), inputs }
+        return corsResponse({
+          ok: true,
+          url: `${GH_API}/repos/${REPO}/actions/workflows/${workflow}/dispatches`,
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${GITHUB_TOKEN.slice(0, 10)}...`,
+            Accept: "application/vnd.github+json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(dispatchBody),
+        }, {})
+      }
+
+      if (path === "debug/real-dispatch") {
+        const body = await request.json().catch(() => ({}))
+        const workflow = (body.workflow || "pipeline.yml").replace(/[^\w.\-]/g, "")
+        const inputs = {}
+        const ALLOWED = new Set(["url","url_fallback","game_name","sha256","use_cache","run_device_cache",
+          "run_java_decompile","run_il2cpp","run_assetripper","publish_spine","publish_game_source",
+          "spine_repo","source_repo","max_texture_side","runner","stage"])
+        for (const [k,v] of Object.entries(body.inputs || {})) {
+          if (!ALLOWED.has(k)) continue
+          inputs[k] = typeof v === "boolean" ? String(v) : String(v).slice(0, 2000)
+        }
+        const dispatchBody = { ref: (body.ref || "main").slice(0, 100), inputs }
+        const r = await fetch(`${GH_API}/repos/${REPO}/actions/workflows/${workflow}/dispatches`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${GITHUB_TOKEN}`,
+            Accept: "application/vnd.github+json",
+            "Content-Type": "application/json",
+            "User-Agent": "apk2source-worker",
+            "X-GitHub-Api-Version": "2022-11-28"
+          },
+          body: JSON.stringify(dispatchBody)
+        })
+        const text = await r.text()
+        return corsResponse({
+          ok: r.ok,
+          status: r.status,
+          body: text.slice(0, 500),
+          url: `${GH_API}/repos/${REPO}/actions/workflows/${workflow}/dispatches`,
+          token_prefix: GITHUB_TOKEN ? GITHUB_TOKEN.slice(0, 10) + "..." : null,
+        }, {})
+      }
     // Workflow dispatch
     if (path === "trigger") {
       if (request.method !== "POST") return fail("POST only", 405)
       if (!GITHUB_TOKEN) return fail("no GITHUB_TOKEN configured", 503)
-      if (PANEL_KEY && !authorized(request)) return fail("invalid X-Panel-Key", 401)
+      if (PANEL_KEY && !authorized(request, PANEL_KEY)) return fail("invalid X-Panel-Key", 401)
       const body = await request.json()
       const workflow = (body.workflow || "pipeline.yml").replace(/[^\w.\-]/g, "")
       if (!/^(pipeline|stage|ci|pages)\.yml$/.test(workflow)) return fail(`workflow not allowed: ${workflow}`, 400)
@@ -225,7 +285,7 @@ export default {
         let runUrl = null, runId = null
         try {
           await new Promise(r => setTimeout(r, 2500))
-          const data = await gh(`/repos/${REPO}/actions/runs?per_page=5&event=workflow_dispatch`, GITHUB_TOKEN)
+          const data = await gh(`/repos/${REPO}/actions/runs?per_page=5&event=workflow_dispatch`, {}, GITHUB_TOKEN)
           const hit = (data.workflow_runs || [])[0]
           if (hit) { runUrl = hit.html_url; runId = String(hit.id) }
         } catch { /* non-fatal */ }
@@ -237,7 +297,7 @@ export default {
     if (path === "stage") {
       if (request.method !== "POST") return fail("POST only", 405)
       if (!GITHUB_TOKEN) return fail("no GITHUB_TOKEN configured", 503)
-      if (PANEL_KEY && !authorized(request)) return fail("invalid X-Panel-Key", 401)
+      if (PANEL_KEY && !authorized(request, PANEL_KEY)) return fail("invalid X-Panel-Key", 401)
       const body = await request.json()
       const stage = (body.stage || "").toLowerCase()
       const STAGES = new Set(["acquire","unpack","detect","unity","spine","publish-spine","publish-source","selftest"])
@@ -255,7 +315,7 @@ export default {
         let runUrl = null, runId = null
         try {
           await new Promise(r => setTimeout(r, 2500))
-          const data = await gh(`/repos/${REPO}/actions/runs?per_page=5&event=workflow_dispatch`, GITHUB_TOKEN)
+          const data = await gh(`/repos/${REPO}/actions/runs?per_page=5&event=workflow_dispatch`, {}, GITHUB_TOKEN)
           const hit = (data.workflow_runs || [])[0]
           if (hit) { runUrl = hit.html_url; runId = String(hit.id) }
         } catch { /* non-fatal */ }
@@ -264,11 +324,14 @@ export default {
     }
 
     return fail("not found", 404)
+    } catch (e) {
+      return corsResponse({ ok: false, error: e.message, stack: e.stack }, {})
+    }
   }
 }
 
 // helpers
-function authorized(req) {
+function authorized(req, panelKey) {
 async function verifySig(sig, secret, request) {
   if (!sig || !secret) return false
   const raw = await request.clone().arrayBuffer()
@@ -284,11 +347,11 @@ async function verifySig(sig, secret, request) {
   return diff === 0
 }
 
-  if (!PANEL_KEY) return true
+  if (!panelKey) return true
   const got = req.headers.get("x-panel-key") || ""
-  if (got.length !== PANEL_KEY.length) return false
+  if (got.length !== panelKey.length) return false
   let diff = 0
-  for (let i = 0; i < PANEL_KEY.length; i++) diff |= PANEL_KEY.charCodeAt(i) ^ got.charCodeAt(i)
+  for (let i = 0; i < panelKey.length; i++) diff |= panelKey.charCodeAt(i) ^ got.charCodeAt(i)
   return diff === 0
 }
 
