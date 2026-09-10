@@ -125,7 +125,7 @@
         lastErr = e;
       }
     }
-    // All backends failed — fall back to static baked data for read-only endpoints
+    // All backends failed — clear bad backend from localStorage and serve from baked data
     if (opts && opts.method !== "POST") {
       const base = (location.pathname.replace(/\/[^\/]*$/, "") || "") + "/data";
       if (path === "/api/runs" || path.startsWith("/api/run/")) {
@@ -168,8 +168,14 @@
       } catch { /* try next */ }
     }
     state.backendOk = false;
+    const oldBackend = state.backend;
     state.backend = "";
-    pill.textContent = "backend: offline (static data only)";
+    localStorage.removeItem(LS_BACKEND);
+    if (oldBackend) {
+      pill.textContent = `backend: ${oldBackend} unavailable — using static data`;
+    } else {
+      pill.textContent = "backend: offline (static data only)";
+    }
     pill.className = "pill pill-err";
     return false;
   }
