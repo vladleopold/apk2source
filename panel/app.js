@@ -10,7 +10,7 @@
   const LS_BACKEND = "apk2source.backend";
   const LS_KEY = "apk2source.key";
   const DEFAULT_BACKENDS = [
-    "https://apk2source-api.leopolds2010.workers.dev",
+    "https://apk2source-api-v3.leopolds2010.workers.dev",
     "http://localhost:3000",
   ];
 
