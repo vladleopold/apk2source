@@ -358,9 +358,9 @@ jobs:
     continue-on-error: true
     strategy:
       fail-fast: false
-      matrix:
-        api: [30]
-        arch: [x86_64]
+       matrix:
+         api: [29]
+         arch: [arm64]
     env:
       WORK: ${{ github.workspace }}/work
       PAYLOAD_DIR: ${{ github.workspace }}/payload
