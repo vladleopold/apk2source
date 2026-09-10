@@ -1,13 +1,13 @@
 // apk2source Cloudflare Worker — GitHub API proxy + workflow dispatch
 // Minimal serverless backend for the GitHub Pages control panel
 
-const GITHUB_TOKEN = env.GITHUB_TOKEN || ""
-const PANEL_KEY = env.PANEL_ACCESS_KEY || ""
-const REPO = env.APK2SOURCE_REPO || "vladleopold/apk2source"
 const GH_API = "https://api.github.com"
 
 export default {
   async fetch(request, env) {
+    const GITHUB_TOKEN = env.GITHUB_TOKEN || ""
+    const PANEL_KEY = env.PANEL_ACCESS_KEY || ""
+    const REPO = env.APK2SOURCE_REPO || "vladleopold/apk2source"
     const url = new URL(request.url)
     const path = url.pathname.replace(/^\/api\//, "")
 
@@ -224,13 +224,5 @@ function fail(message, status = 500, extra = {}) {
   return new Response(JSON.stringify({ ok: false, error: message, ...extra }), {
     status, headers: { "Content-Type": "application/json; charset=utf-8",
       "Access-Control-Allow-Origin": "*" }
-  })
-}
-
-function corsResponse(body, headers = {}) {
-  return new Response(JSON.stringify(body), {
-    status: 200, headers: { "Content-Type": "application/json; charset=utf-8",
-      "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, X-Panel-Key", "Access-Control-Max-Age": "86400", ...headers }
   })
 }

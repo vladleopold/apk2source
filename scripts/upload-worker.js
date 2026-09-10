@@ -15,6 +15,7 @@ const boundary = "----FormBoundary" + Math.random().toString(36).slice(2);
 const body = fs.readFileSync(SCRIPT_PATH);
 const meta = JSON.stringify({
   main_module: "worker.mjs",
+  type: "esm",
   compatibility_date: "2025-02-01",
   compatibility_flags: ["nodejs_compat"],
   workers_dev: true,
@@ -30,8 +31,7 @@ function buildPart(headers, data) {
 const parts = [];
 parts.push(buildPart(
   { "Content-Disposition": 'form-data; name="main_module"; filename="worker.mjs"',
-    "Content-Type": "application/javascript",
-    "Content-Transfer-Encoding": "binary" },
+    "Content-Type": "text/javascript" },
   body
 ));
 parts.push(buildPart(

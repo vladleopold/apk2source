@@ -1,4 +1,10 @@
 name = "apk2source-api"
 main = "backend/worker.js"
 compatibility_date = "2025-02-01"
+compatibility_flags = ["nodejs_compat"]
 workers_dev = true
+
+[vars]
+APK2SOURCE_REPO = "vladleopold/apk2source"
+APK2SOURCE_SPINE_REPO = "vladleopold/source_spine"
+APK2SOURCE_SOURCE_REPO = "vladleopold/game_source"
