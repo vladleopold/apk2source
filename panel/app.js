@@ -14,7 +14,6 @@
 
   const DEFAULT_BACKENDS = [
     "https://apk2source-api-v3.leopolds2010.workers.dev",
-    "http://localhost:3000",
   ];
 
   const $ = (s, r = document) => r.querySelector(s);
@@ -97,18 +96,59 @@
       if (opts && opts.method === "POST") throw new Error("write operations require backend. Use GitHub Actions UI.");
       throw new Error("static mode: unsupported endpoint");
     }
-    // Dynamic mode: use backend
+    // Dynamic mode: use backend with fallback to next backend on 403/503
     const headers = { Accept: "application/json", ...(opts.headers || {}) };
     if (opts.body) headers["Content-Type"] = "application/json";
     if (state.key) headers["X-Panel-Key"] = state.key;
-    const r = await fetch(`${state.backend.replace(/\/$/, "")}${path}`, {
-      ...opts, headers, body: opts.body ? JSON.stringify(opts.body) : undefined,
-    });
-    const text = await r.text();
-    let data = null;
-    try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
-    if (!r.ok) throw new Error((data && (data.error || data.message)) || `HTTP ${r.status}`);
-    return data;
+    
+    let lastErr = null;
+    for (const candidate of [state.backend, ...DEFAULT_BACKENDS].filter(Boolean)) {
+      try {
+        const url = `${candidate.replace(/\/$/, "")}${path}`;
+        const r = await fetch(url, {
+          ...opts, headers, body: opts.body ? JSON.stringify(opts.body) : undefined,
+        });
+        const text = await r.text();
+        let data = null;
+        try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+        if (!r.ok) {
+          const msg = (data && (data.error || data.message)) || `HTTP ${r.status}`;
+          if ((r.status === 403 || r.status === 503)) {
+            // Backend unavailable, try next in list
+            lastErr = new Error(msg);
+            continue;
+          }
+          throw new Error(msg);
+        }
+        return data;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    // All backends failed — fall back to static baked data for read-only endpoints
+    if (opts && opts.method !== "POST") {
+      const base = (location.pathname.replace(/\/[^\/]*$/, "") || "") + "/data";
+      if (path === "/api/runs" || path.startsWith("/api/run/")) {
+        const idx = await loadStatic(`${base}/index.json`, { runs: [] });
+        if (path === "/api/runs") {
+          return { ok: true, total: idx.runs.length, runs: idx.runs.map(r => ({
+            run_id: String(r.run_id), id: Number(r.id), name: r.name, display_title: r.display_title,
+            status: r.status, conclusion: r.conclusion, event: r.event, html_url: r.html_url,
+            created_at: r.created_at, updated_at: r.updated_at, run_started_at: r.run_started_at,
+            head_branch: r.head_branch, actor: r.actor
+          })) };
+        }
+        const runId = path.split("/")[1];
+        const run = idx.runs.find(r => String(r.run_id) === runId);
+        if (run) {
+          return { ok: true, run: { run_id: String(run.run_id), name: run.name, display_title: run.display_title,
+              status: run.status, conclusion: run.conclusion, event: run.event, html_url: run.html_url,
+              created_at: run.created_at, updated_at: run.updated_at, run_started_at: run.run_started_at,
+              head_branch: run.head_branch, actor: run.actor }, jobs: [] };
+        }
+      }
+    }
+    throw lastErr || new Error("all backends failed");
   }
 
   async function detectBackend() {
