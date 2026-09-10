@@ -21,7 +21,7 @@
 
   const state = {
     config: {},
-    backend: localStorage.getItem(LS_BACKEND) || "",
+    backend: "",  // Start fresh; detectBackend will set correct URL
     key: localStorage.getItem(LS_KEY) || "d6d0e1b39714d1304018c209bbf0e352d57b99ff6de02eac",
     backendOk: false,
     runs: [],
@@ -167,10 +167,10 @@
         }
       } catch { /* try next */ }
     }
-    state.backendOk = false;
-    const oldBackend = state.backend;
-    state.backend = "";
+    // Clear stale backend from localStorage so we don't retry the dead URL
     localStorage.removeItem(LS_BACKEND);
+    state.backendOk = false;
+    state.backend = "";
     if (oldBackend) {
       pill.textContent = `backend: ${oldBackend} unavailable — using static data`;
     } else {
