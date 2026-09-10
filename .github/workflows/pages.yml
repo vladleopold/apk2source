@@ -102,10 +102,10 @@ jobs:
           cat > _site/data/config.json <<JSON
           {
             "repository": "${GITHUB_REPOSITORY}",
-            "api_base": "${{ vars.APK2SOURCE_API_BASE }}",
-            "backend": "${{ vars.APK2SOURCE_BACKEND_URL }}",
-            "spine_repo": "${{ vars.APK2SOURCE_SPINE_REPO }}",
-            "source_repo": "${{ vars.APK2SOURCE_SOURCE_REPO }}",
+            "api_base": "${APK2SOURCE_API_BASE:-https://apk2source-api.leopolds2010.workers.dev}",
+            "backend": "${APK2SOURCE_BACKEND_URL:-https://apk2source-api.leopolds2010.workers.dev}",
+            "spine_repo": "${APK2SOURCE_SPINE_REPO:-vladleopold/source_spine}",
+            "source_repo": "${APK2SOURCE_SOURCE_REPO:-vladleopold/game_source}",
             "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "run_id": "${GITHUB_RUN_ID}"
           }
