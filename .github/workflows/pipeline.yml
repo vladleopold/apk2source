@@ -298,7 +298,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: base-apk
-          path: "${{ steps.unpack.outputs.splits_dir }}/base.apk"
+          path: ${{ steps.unpack.outputs.splits_dir }}
           retention-days: 3
           if-no-files-found: ignore
 
