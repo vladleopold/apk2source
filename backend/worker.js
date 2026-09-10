@@ -140,7 +140,37 @@ export default {
       } catch (e) { return fail(e.message, e.status || 500) }
     }
 
-    
+    // trigger (alias for automation/selftest)
+    if (path === "automation/selftest" || path === "trigger") {
+      if (request.method !== "POST") return fail("POST only", 405)
+      if (!GITHUB_TOKEN) return fail("no GITHUB_TOKEN configured", 503)
+      if (PANEL_KEY && !authorized(request, PANEL_KEY)) return fail("invalid X-Panel-Key", 401)
+      const body = await request.json().catch(() => ({}))
+      const game = (body.game_name || "apk2source-selftest").slice(0, 120)
+      try {
+        const r = await fetch(`${GH_API}/repos/${REPO}/actions/workflows/pipeline.yml/dispatches`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, "Content-Type": "application/json",
+            "Accept": "application/vnd.github+json", "User-Agent": "apk2source-worker" },
+          body: JSON.stringify({ ref: (body.ref || "main").slice(0, 100),
+            inputs: { action: "selftest", game_name: game } })
+        })
+        if (!r.ok) {
+          const t = await r.text()
+          let msg = t.slice(0, 500)
+          try { msg = JSON.parse(t).message || msg } catch {}
+          return fail(`GitHub API ${r.status}: ${msg}`, r.status)
+        }
+        let runUrl = null, runId = null
+        try {
+          await new Promise(res => setTimeout(res, 2500))
+          const data = await gh(`/repos/${REPO}/actions/runs?per_page=5&event=workflow_dispatch`, {}, GITHUB_TOKEN)
+          const hit = (data.workflow_runs || [])[0]
+          if (hit) { runUrl = hit.html_url; runId = String(hit.id) }
+        } catch { /* non-fatal */ }
+        return corsResponse({ ok: true, action: "selftest", game_name: game, run_id: runId, run_url: runUrl }, {})
+      } catch (e) { return fail(e.message, e.status || 500) }
+    }
 
     if (path === "automation/notify") {
       if (request.method !== "POST") return fail("POST only", 405)
@@ -171,11 +201,11 @@ export default {
       const STAGES = new Set(["selftest-run", "status-check", "pipeline-run", "stage-run"])
       if (!STAGES.has(action)) return fail(`unknown webhook action: ${action}`, 400)
       try {
-        await gh(`/repos/${REPO}/actions/workflows/.github%2Fworkflows%2Fpipeline.yml/dispatches`, GITHUB_TOKEN, {
+        await gh(`/repos/${REPO}/actions/workflows/pipeline.yml/dispatches`, {
           method: "POST", body: { ref: (body.ref || "main").slice(0, 100),
             inputs: { action: action === "selftest-run" ? "selftest" : action === "pipeline-run" ? "full-pipeline" : "status",
               game_name: String(body.game_name || "apk2source-selftest").slice(0, 120) } }
-        })
+        }, GITHUB_TOKEN)
         return corsResponse({ ok: true, dispatched: action }, {})
       } catch (e) { return fail(e.message, e.status || 500) }
     }
@@ -196,7 +226,7 @@ export default {
         const dispatchBody = { ref: (body.ref || "main").slice(0, 100), inputs }
         return corsResponse({
           ok: true,
-          url: `${GH_API}/repos/${REPO}/actions/workflows/.github%2Fworkflows%2F${workflow}/dispatches`,
+          url: `${GH_API}/repos/${REPO}/actions/workflows/${workflow}/dispatches`,
           method: "POST",
           headers: {
             Authorization: `Bearer ${GITHUB_TOKEN.slice(0, 10)}...`,
@@ -219,7 +249,7 @@ export default {
           inputs[k] = typeof v === "boolean" ? String(v) : String(v).slice(0, 2000)
         }
         const dispatchBody = { ref: (body.ref || "main").slice(0, 100), inputs }
-        const r = await fetch(`${GH_API}/repos/${REPO}/actions/workflows/.github%2Fworkflows%2F${workflow}/dispatches`, {
+        const r = await fetch(`${GH_API}/repos/${REPO}/actions/workflows/${workflow}/dispatches`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${GITHUB_TOKEN}`,
@@ -235,7 +265,7 @@ export default {
           ok: r.ok,
           status: r.status,
           body: text.slice(0, 500),
-          url: `${GH_API}/repos/${REPO}/actions/workflows/.github%2Fworkflows%2F${workflow}/dispatches`,
+          url: `${GH_API}/repos/${REPO}/actions/workflows/${workflow}/dispatches`,
           token_prefix: GITHUB_TOKEN ? GITHUB_TOKEN.slice(0, 10) + "..." : null,
         }, {})
       }
@@ -261,7 +291,7 @@ export default {
         }
         return corsResponse({
           ok: true,
-          url: `${GH_API}/repos/${REPO}/actions/workflows/.github%2Fworkflows%2F${workflow}/dispatches`,
+          url: `${GH_API}/repos/${REPO}/actions/workflows/${workflow}/dispatches`,
           headers: {
             Authorization: `Bearer ${GITHUB_TOKEN.slice(0, 10)}...`,
             Accept: headers.Accept,
@@ -312,9 +342,9 @@ export default {
       if (!inputs.url && workflow === "pipeline.yml") return fail("inputs.url required", 400)
       if (!inputs.game_name && workflow === "pipeline.yml") return fail("inputs.game_name required", 400)
       try {
-        await gh(`/repos/${REPO}/actions/workflows/.github%2Fworkflows%2F${workflow}/dispatches`, GITHUB_TOKEN, {
+        await gh(`/repos/${REPO}/actions/workflows/${workflow}/dispatches`, {
           method: "POST", body: { ref: (body.ref || "main").slice(0, 100), inputs }
-        })
+        }, GITHUB_TOKEN)
         // Find the run we just created
         let runUrl = null, runId = null
         try {
@@ -343,9 +373,9 @@ export default {
         spine_repo: (body.spine_repo || "leaopold/source_spine").slice(0, 120),
         source_repo: (body.source_repo || "leaopold/game_source").slice(0, 120) }
       try {
-        await gh(`/repos/${REPO}/actions/workflows/stage.yml/dispatches`, GITHUB_TOKEN, {
+        await gh(`/repos/${REPO}/actions/workflows/stage.yml/dispatches`, {
           method: "POST", body: { ref: (body.ref || "main").slice(0, 100), inputs }
-        })
+        }, GITHUB_TOKEN)
         let runUrl = null, runId = null
         try {
           await new Promise(r => setTimeout(r, 2500))
