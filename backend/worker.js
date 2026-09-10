@@ -171,7 +171,7 @@ export default {
       const STAGES = new Set(["selftest-run", "status-check", "pipeline-run", "stage-run"])
       if (!STAGES.has(action)) return fail(`unknown webhook action: ${action}`, 400)
       try {
-        await gh(`/repos/${REPO}/actions/workflows/pipeline.yml/dispatches`, GITHUB_TOKEN, {
+        await gh(`/repos/${REPO}/actions/workflows/.github%2Fworkflows%2Fpipeline.yml/dispatches`, GITHUB_TOKEN, {
           method: "POST", body: { ref: (body.ref || "main").slice(0, 100),
             inputs: { action: action === "selftest-run" ? "selftest" : action === "pipeline-run" ? "full-pipeline" : "status",
               game_name: String(body.game_name || "apk2source-selftest").slice(0, 120) } }
