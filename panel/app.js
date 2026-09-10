@@ -63,7 +63,33 @@
 
   // ---------------------------------------------------------------- backend
   async function api(path, opts = {}) {
-    if (!state.backend) throw new Error("no backend configured");
+    // Static mode: no backend needed for read-only operations
+    if (!state.backend) {
+      if (path.startsWith("/api/runs") || path.startsWith("/api/run/") || 
+          path.startsWith("/api/tree") || path.startsWith("/api/config")) {
+        // Try loading from baked-in panel-data/index.json
+        if (path === "/api/config") {
+          const base = (location.pathname.replace(/\/[^\/]*$/, "") || "") + "/data";
+          const cfg = await loadStatic(`${base}/config.json`, {});
+          return { ok: true, repository: cfg.repository || "", spine_repo: cfg.spine_repo || "", source_repo: cfg.source_repo || "", stages: ["acquire","unpack","detect","unity","spine","publish-spine","publish-source","selftest"], panel_key_required: false };
+        }
+        if (path === "/api/runs") {
+          const base = (location.pathname.replace(/\/[^\/]*$/, "") || "") + "/data";
+          const idx = await loadStatic(`${base}/index.json`, { runs: [] });
+          return { ok: true, total: idx.runs.length, runs: idx.runs.map(r => ({ run_id: String(r.run_id), id: Number(r.id), name: r.name, display_title: r.display_title, status: r.status, conclusion: r.conclusion, event: r.event, html_url: r.html_url, created_at: r.created_at, updated_at: r.updated_at, run_started_at: r.run_started_at, head_branch: r.head_branch, actor: r.actor })) };
+        }
+        if (path.startsWith("/api/run/")) {
+          const runId = path.split("/")[1];
+          const base = (location.pathname.replace(/\/[^\/]*$/, "") || "") + "/data";
+          const idx = await loadStatic(`${base}/index.json`, { runs: [] });
+          const run = idx.runs.find(r => String(r.run_id) === runId);
+          if (!run) throw new Error("run not found");
+          return { ok: true, run: { run_id: String(run.run_id), name: run.name, display_title: run.display_title, status: run.status, conclusion: run.conclusion, event: run.event, html_url: run.html_url, created_at: run.created_at, updated_at: run.updated_at, run_started_at: run.run_started_at, head_branch: run.head_branch, actor: run.actor }, jobs: [] };
+        }
+        throw new Error("read-only mode: unsupported endpoint");
+      }
+      throw new Error("backend required for write operations. Configure it in Settings.");
+    }
     const headers = { Accept: "application/json", ...(opts.headers || {}) };
     if (opts.body) headers["Content-Type"] = "application/json";
     if (state.key) headers["X-Panel-Key"] = state.key;
