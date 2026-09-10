@@ -388,7 +388,10 @@ jobs:
 
       - name: Unpack splits
         id: unpack
-        run: apk2source unpack --input "$PAYLOAD_DIR"/* --out "$WORK/unpacked" --work "$WORK"
+        run: |
+          APK="$(find "$PAYLOAD_DIR" -maxdepth 1 \( -name "*.apk" -o -name "*.apks" -o -name "*.xapk" -o -name "*.aab" -o -name "*.apkm" \) -type f | head -1)"
+          test -n "$APK" || { echo "::error::no APK found"; exit 1; }
+          apk2source unpack --input "$APK" --out "$WORK/unpacked" --work "$WORK"
 
       - name: Enable KVM/hardware acceleration info
         run: system_profiler SPHardwareDataType | head -20 || true
