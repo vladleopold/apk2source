@@ -232,5 +232,5 @@
       }
     }
   ],
-  "backend_url": "https://apk2source-api-v3.leopolds2010.workers.dev"
+  "backend": "https://apk2source-api-v3.leopolds2010.workers.dev"
 }
