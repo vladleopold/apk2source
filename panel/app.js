@@ -6,14 +6,13 @@
  */
 (() => {
   "use strict";
-
   const LS_BACKEND = "apk2source.backend";
   const LS_KEY = "apk2source.key";
   const REPO = "vladleopold/apk2source";
-const SPINE_REPO = "leaopold/source_spine";
-const SOURCE_REPO = "leaopold/game_source";
+  const SPINE_REPO = "leaopold/source_spine";
+  const SOURCE_REPO = "leaopold/game_source";
 
-const DEFAULT_BACKENDS = [
+  const DEFAULT_BACKENDS = [
     "https://apk2source-api-v3.leopolds2010.workers.dev",
     "http://localhost:3000",
   ];
@@ -67,79 +66,38 @@ const DEFAULT_BACKENDS = [
 
   // ---------------------------------------------------------------- backend
   async function api(path, opts = {}) {
-    // === STATIC MODE: no backend needed ===
+    // Static mode: serve from baked panel-data/index.json when no backend
     if (!state.backend) {
       const base = (location.pathname.replace(/\/[^\/]*$/, "") || "") + "/data";
-      
-      // Config
       if (path === "/api/config") {
-        return { ok: true, repository: "${REPO}", spine_repo: "${SPINE_REPO}", source_repo: "${SOURCE_REPO}", stages: ["acquire","unpack","detect","unity","spine","publish-spine","publish-source","selftest"], panel_key_required: false };
+        return { ok: true, repository: REPO, spine_repo: SPINE_REPO, source_repo: SOURCE_REPO,
+          stages: ["acquire","unpack","detect","unity","spine","publish-spine","publish-source","selftest"],
+          panel_key_required: false };
       }
-      
-      // Runs list - load from baked index.json
       if (path === "/api/runs") {
         const idx = await loadStatic(`${base}/index.json`, { runs: [] });
-        return { ok: true, total: idx.runs.length, runs: idx.runs.map(r => ({ run_id: String(r.run_id), id: Number(r.id), name: r.name, display_title: r.display_title, status: r.status, conclusion: r.conclusion, event: r.event, html_url: r.html_url, created_at: r.created_at, updated_at: r.updated_at, run_started_at: r.run_started_at, head_branch: r.head_branch, actor: r.actor })) };
+        return { ok: true, total: idx.runs.length, runs: idx.runs.map(r => ({
+          run_id: String(r.run_id), id: Number(r.id), name: r.name, display_title: r.display_title,
+          status: r.status, conclusion: r.conclusion, event: r.event, html_url: r.html_url,
+          created_at: r.created_at, updated_at: r.updated_at, run_started_at: r.run_started_at,
+          head_branch: r.head_branch, actor: r.actor
+        })) };
       }
-      
-      // Single run
       if (path.startsWith("/api/run/")) {
         const runId = path.split("/")[1];
         const idx = await loadStatic(`${base}/index.json`, { runs: [] });
         const run = idx.runs.find(r => String(r.run_id) === runId);
         if (!run) throw new Error("run not found");
-        return { ok: true, run: { run_id: String(run.run_id), name: run.name, display_title: run.display_title, status: run.status, conclusion: run.conclusion, event: run.event, html_url: run.html_url, created_at: run.created_at, updated_at: run.updated_at, run_started_at: run.run_started_at, head_branch: run.head_branch, actor: run.actor }, jobs: [] };
+        return { ok: true, run: { run_id: String(run.run_id), name: run.name, display_title: run.display_title,
+            status: run.status, conclusion: run.conclusion, event: run.event, html_url: run.html_url,
+            created_at: run.created_at, updated_at: run.updated_at, run_started_at: run.run_started_at,
+            head_branch: run.head_branch, actor: run.actor }, jobs: [] };
       }
-      
-      // Tree browser - disabled in static mode
-      if (path === "/api/tree") {
-        throw new Error("tree browsing requires backend");
-      }
-      
-      // All write operations - show instructions
-      if (opts && opts.method === "POST") {
-        throw new Error("write operations require backend. Use GitHub Actions UI instead.");
-      }
-      
+      if (path === "/api/tree") throw new Error("tree browsing requires backend");
+      if (opts && opts.method === "POST") throw new Error("write operations require backend. Use GitHub Actions UI.");
       throw new Error("static mode: unsupported endpoint");
     }
-    
-    // === DYNAMIC MODE: use backend ===
-    const headers = { Accept: "application/json", ...(opts.headers || {}) };
-    if (opts.body) headers["Content-Type"] = "application/json";
-    if (state.key) headers["X-Panel-Key"] = state.key;
-    const r = await fetch(`${state.backend.replace(/\/$/, "")}${path}`, {
-      ...opts, headers, body: opts.body ? JSON.stringify(opts.body) : undefined,
-    });
-    const text = await r.text();
-    let data = null;
-    try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
-    if (!r.ok) throw new Error((data && (data.error || data.message)) || `HTTP ${r.status}`);
-    return data;
-  }
-        // Try loading from baked-in panel-data/index.json
-        if (path === "/api/config") {
-          const base = (location.pathname.replace(/\/[^\/]*$/, "") || "") + "/data";
-          const cfg = await loadStatic(`${base}/config.json`, {});
-          return { ok: true, repository: cfg.repository || "", spine_repo: cfg.spine_repo || "", source_repo: cfg.source_repo || "", stages: ["acquire","unpack","detect","unity","spine","publish-spine","publish-source","selftest"], panel_key_required: false };
-        }
-        if (path === "/api/runs") {
-          const base = (location.pathname.replace(/\/[^\/]*$/, "") || "") + "/data";
-          const idx = await loadStatic(`${base}/index.json`, { runs: [] });
-          return { ok: true, total: idx.runs.length, runs: idx.runs.map(r => ({ run_id: String(r.run_id), id: Number(r.id), name: r.name, display_title: r.display_title, status: r.status, conclusion: r.conclusion, event: r.event, html_url: r.html_url, created_at: r.created_at, updated_at: r.updated_at, run_started_at: r.run_started_at, head_branch: r.head_branch, actor: r.actor })) };
-        }
-        if (path.startsWith("/api/run/")) {
-          const runId = path.split("/")[1];
-          const base = (location.pathname.replace(/\/[^\/]*$/, "") || "") + "/data";
-          const idx = await loadStatic(`${base}/index.json`, { runs: [] });
-          const run = idx.runs.find(r => String(r.run_id) === runId);
-          if (!run) throw new Error("run not found");
-          return { ok: true, run: { run_id: String(run.run_id), name: run.name, display_title: run.display_title, status: run.status, conclusion: run.conclusion, event: run.event, html_url: run.html_url, created_at: run.created_at, updated_at: run.updated_at, run_started_at: run.run_started_at, head_branch: run.head_branch, actor: run.actor }, jobs: [] };
-        }
-        throw new Error("read-only mode: unsupported endpoint");
-      }
-      throw new Error("backend required for write operations. Configure it in Settings.");
-    }
+    // Dynamic mode: use backend
     const headers = { Accept: "application/json", ...(opts.headers || {}) };
     if (opts.body) headers["Content-Type"] = "application/json";
     if (state.key) headers["X-Panel-Key"] = state.key;
@@ -446,10 +404,6 @@ const DEFAULT_BACKENDS = [
 
     form.addEventListener("submit", async (ev) => {
       ev.preventDefault();
-      if (!state.backendOk) {
-        setMsg(msg, "Backend is offline. Configure it in ⚙ Settings, or dispatch from the GitHub UI: Actions → Pipeline → Run workflow.", "err");
-        return;
-      }
       const fd = new FormData(form);
       const inputs = {};
       for (const [k, v] of fd.entries()) {
@@ -459,13 +413,25 @@ const DEFAULT_BACKENDS = [
       $$('input[type=checkbox]', form).forEach((c) => { inputs[c.name] = c.checked ? "true" : "false"; });
 
       btn.disabled = true;
-      setMsg(msg, "Dispatching…");
+      setMsg(msg, "Opening GitHub Actions…");
       try {
-        const r = await api("/api/trigger", { method: "POST", body: { workflow: "pipeline.yml", inputs } });
-        setMsg(msg, `Dispatched. ${r.run_url ? `Tracking ${r.run_url}` : "Check the History tab in ~10s."}`, "ok");
-        setTimeout(loadRuns, 8000);
+        // Try backend first
+        if (state.backendOk) {
+          const r = await api("/api/trigger", { method: "POST", body: { workflow: "pipeline.yml", inputs } });
+          setMsg(msg, `Dispatched. ${r.run_url ? \`Tracking \${r.run_url}\` : "Check the History tab in ~10s."}`, "ok");
+          setTimeout(loadRuns, 8000);
+        } else {
+          // Open GitHub Actions UI directly
+          const url = `https://github.com/${REPO}/actions/workflows/pipeline.yml`;
+          const win = window.open(url, "_blank");
+          if (!win) {
+            setMsg(msg, "Pop-up blocked! Allow pop-ups for this site.", "err");
+          } else {
+            setMsg(msg, `Opened in new tab. Click "Run workflow" below the title, fill the form, and press "Run workflow".`, "ok");
+          }
+        }
       } catch (e) {
-        setMsg(msg, `Dispatch failed: ${e.message}`, "err");
+        setMsg(msg, `Error: ${e.message}`, "err");
       } finally {
         btn.disabled = false;
       }
