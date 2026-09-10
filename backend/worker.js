@@ -196,7 +196,7 @@ export default {
         const dispatchBody = { ref: (body.ref || "main").slice(0, 100), inputs }
         return corsResponse({
           ok: true,
-          url: `${GH_API}/repos/${REPO}/actions/workflows/${workflow}/dispatches`,
+          url: `${GH_API}/repos/${REPO}/actions/workflows/.github%2Fworkflows%2F${workflow}/dispatches`,
           method: "POST",
           headers: {
             Authorization: `Bearer ${GITHUB_TOKEN.slice(0, 10)}...`,
@@ -219,7 +219,7 @@ export default {
           inputs[k] = typeof v === "boolean" ? String(v) : String(v).slice(0, 2000)
         }
         const dispatchBody = { ref: (body.ref || "main").slice(0, 100), inputs }
-        const r = await fetch(`${GH_API}/repos/${REPO}/actions/workflows/${workflow}/dispatches`, {
+        const r = await fetch(`${GH_API}/repos/${REPO}/actions/workflows/.github%2Fworkflows%2F${workflow}/dispatches`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${GITHUB_TOKEN}`,
@@ -235,7 +235,7 @@ export default {
           ok: r.ok,
           status: r.status,
           body: text.slice(0, 500),
-          url: `${GH_API}/repos/${REPO}/actions/workflows/${workflow}/dispatches`,
+          url: `${GH_API}/repos/${REPO}/actions/workflows/.github%2Fworkflows%2F${workflow}/dispatches`,
           token_prefix: GITHUB_TOKEN ? GITHUB_TOKEN.slice(0, 10) + "..." : null,
         }, {})
       }
@@ -261,7 +261,7 @@ export default {
         }
         return corsResponse({
           ok: true,
-          url: `${GH_API}/repos/${REPO}/actions/workflows/${workflow}/dispatches`,
+          url: `${GH_API}/repos/${REPO}/actions/workflows/.github%2Fworkflows%2F${workflow}/dispatches`,
           headers: {
             Authorization: `Bearer ${GITHUB_TOKEN.slice(0, 10)}...`,
             Accept: headers.Accept,
@@ -312,7 +312,7 @@ export default {
       if (!inputs.url && workflow === "pipeline.yml") return fail("inputs.url required", 400)
       if (!inputs.game_name && workflow === "pipeline.yml") return fail("inputs.game_name required", 400)
       try {
-        await gh(`/repos/${REPO}/actions/workflows/${workflow}/dispatches`, GITHUB_TOKEN, {
+        await gh(`/repos/${REPO}/actions/workflows/.github%2Fworkflows%2F${workflow}/dispatches`, GITHUB_TOKEN, {
           method: "POST", body: { ref: (body.ref || "main").slice(0, 100), inputs }
         })
         // Find the run we just created
