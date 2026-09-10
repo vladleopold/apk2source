@@ -37,7 +37,7 @@ export default {
     if (path === "runs") {
       const perPage = Math.min(parseInt(url.searchParams.get("per_page") || "50"), 100)
       try {
-        const data = await gh(`/repos/${REPO}/actions/runs?per_page=${perPage}`)
+        const data = await gh(`/repos/${REPO}/actions/runs?per_page=${perPage}`, GITHUB_TOKEN)
         const runs = (data.workflow_runs || []).map(r => ({
           run_id: String(r.id), id: r.id, name: r.name, display_title: r.display_title,
           status: r.status, conclusion: r.conclusion, event: r.event, html_url: r.html_url,
@@ -53,8 +53,8 @@ export default {
       const runId = path.split("/")[1]
       try {
         const [run, jobsData] = await Promise.all([
-          gh(`/repos/${REPO}/actions/runs/${runId}`),
-          gh(`/repos/${REPO}/actions/runs/${runId}/jobs?per_page=100`),
+          gh(`/repos/${REPO}/actions/runs/${runId}`, GITHUB_TOKEN),
+          gh(`/repos/${REPO}/actions/runs/${runId}/jobs?per_page=100`, GITHUB_TOKEN),
         ])
         const jobs = (jobsData.jobs || []).map(j => ({
           id: j.id, name: j.name, status: j.status, conclusion: j.conclusion,
@@ -76,7 +76,7 @@ export default {
       const runId = url.searchParams.get("run_id")
       if (!runId) return fail("run_id required", 400)
       try {
-        const data = await gh(`/repos/${REPO}/actions/runs/${runId}/artifacts?per_page=100`)
+        const data = await gh(`/repos/${REPO}/actions/runs/${runId}/artifacts?per_page=100`, GITHUB_TOKEN)
         return corsResponse({ ok: true, total: data.total_count,
           artifacts: (data.artifacts || []).map(a => ({
             id: a.id, name: a.name, size_in_bytes: a.size_in_bytes, expired: a.expired,
@@ -122,6 +122,83 @@ export default {
       }
     }
 
+    // ---------------------------------------------------------------- automation
+    if (path === "automation/status") {
+      try {
+        const [wfData, runsData] = await Promise.all([
+          gh(`/repos/${REPO}/actions/workflows`, GITHUB_TOKEN),
+          gh(`/repos/${REPO}/actions/runs?per_page=10&branch=main`, GITHUB_TOKEN),
+        ])
+        const workflows = (wfData.workflows || []).map(w => ({ name: w.name, state: w.state, path: w.path }))
+        const recent = (runsData.workflow_runs || []).map(r => ({
+          id: r.id, name: r.name, status: r.status, conclusion: r.conclusion,
+          event: r.event, html_url: r.html_url, created_at: r.created_at
+        }))
+        return corsResponse({ ok: true, repository: REPO, generated_at: new Date().toISOString(),
+          workflows, recent_runs: recent }, {})
+      } catch (e) { return fail(e.message, e.status || 500) }
+    }
+
+    if (path === "automation/selftest") {
+      if (request.method !== "POST") return fail("POST only", 405)
+      if (!GITHUB_TOKEN) return fail("no GITHUB_TOKEN configured", 503)
+      if (PANEL_KEY && !authorized(request)) return fail("invalid X-Panel-Key", 401)
+      const body = await request.json()
+      const game = (body.game_name || "apk2source-selftest").slice(0, 120)
+      try {
+        await gh(`/repos/${REPO}/actions/workflows/automation.yml/dispatches`, GITHUB_TOKEN, {
+          method: "POST", body: { ref: (body.ref || "main").slice(0, 100),
+            inputs: { action: "selftest", game_name: game } }
+        })
+        let runUrl = null, runId = null
+        try {
+          await new Promise(r => setTimeout(r, 2500))
+          const data = await gh(`/repos/${REPO}/actions/runs?per_page=5&event=workflow_dispatch`, GITHUB_TOKEN)
+          const hit = (data.workflow_runs || [])[0]
+          if (hit) { runUrl = hit.html_url; runId = String(hit.id) }
+        } catch { /* non-fatal */ }
+        return corsResponse({ ok: true, action: "selftest", game_name: game, run_id: runId, run_url: runUrl }, {})
+      } catch (e) { return fail(e.message, e.status || 500) }
+    }
+
+    if (path === "automation/notify") {
+      if (request.method !== "POST") return fail("POST only", 405)
+      if (!GITHUB_TOKEN) return fail("no GITHUB_TOKEN configured", 503)
+      if (PANEL_KEY && !authorized(request)) return fail("invalid X-Panel-Key", 401)
+      const body = await request.json()
+      const url = (body.url || "").slice(0, 2000)
+      const text = String(body.text || body.message || "apk2source status").slice(0, 4096)
+      if (!url) return fail("url required (Telegram/Slack/ webhook)", 400)
+      try {
+        const r = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text, repository: REPO, ts: new Date().toISOString() })
+        })
+        const out = await r.text()
+        return corsResponse({ ok: r.ok, status: r.status, body: out.slice(0, 500) }, {})
+      } catch (e) { return fail(e.message, 500) }
+    }
+
+    if (path === "webhook") {
+      if (request.method !== "POST") return fail("POST only", 405)
+      const sig = request.headers.get("x-apk2source-signature") || ""
+      const expected = env.APK2SOURCE_WEBHOOK_SECRET || ""
+      if (expected && !verifySig(sig, expected, request)) return fail("bad signature", 401)
+      const body = await request.json()
+      const action = String(body.action || body.event || "status-check").slice(0, 60)
+      const STAGES = new Set(["selftest-run", "status-check", "pipeline-run", "stage-run"])
+      if (!STAGES.has(action)) return fail(`unknown webhook action: ${action}`, 400)
+      try {
+        await gh(`/repos/${REPO}/actions/workflows/automation.yml/dispatches`, GITHUB_TOKEN, {
+          method: "POST", body: { ref: (body.ref || "main").slice(0, 100),
+            inputs: { action: action === "selftest-run" ? "selftest" : action === "pipeline-run" ? "full-pipeline" : "status",
+              game_name: String(body.game_name || "apk2source-selftest").slice(0, 120) } }
+        })
+        return corsResponse({ ok: true, dispatched: action }, {})
+      } catch (e) { return fail(e.message, e.status || 500) }
+    }
+
     // Workflow dispatch
     if (path === "trigger") {
       if (request.method !== "POST") return fail("POST only", 405)
@@ -148,7 +225,7 @@ export default {
         let runUrl = null, runId = null
         try {
           await new Promise(r => setTimeout(r, 2500))
-          const data = await gh(`/repos/${REPO}/actions/runs?per_page=5&event=workflow_dispatch`)
+          const data = await gh(`/repos/${REPO}/actions/runs?per_page=5&event=workflow_dispatch`, GITHUB_TOKEN)
           const hit = (data.workflow_runs || [])[0]
           if (hit) { runUrl = hit.html_url; runId = String(hit.id) }
         } catch { /* non-fatal */ }
@@ -178,7 +255,7 @@ export default {
         let runUrl = null, runId = null
         try {
           await new Promise(r => setTimeout(r, 2500))
-          const data = await gh(`/repos/${REPO}/actions/runs?per_page=5&event=workflow_dispatch`)
+          const data = await gh(`/repos/${REPO}/actions/runs?per_page=5&event=workflow_dispatch`, GITHUB_TOKEN)
           const hit = (data.workflow_runs || [])[0]
           if (hit) { runUrl = hit.html_url; runId = String(hit.id) }
         } catch { /* non-fatal */ }
@@ -192,6 +269,21 @@ export default {
 
 // helpers
 function authorized(req) {
+async function verifySig(sig, secret, request) {
+  if (!sig || !secret) return false
+  const raw = await request.clone().arrayBuffer()
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  const mac = await crypto.subtle.sign('HMAC', key, raw)
+  const hex = [...new Uint8Array(mac)].map(b => b.toString(16).padStart(2, '0')).join('')
+  const expected = hex
+  const got = sig.startsWith('sha256=') ? sig.slice(7) : sig
+  if (got.length !== expected.length) return false
+  let diff = 0
+  for (let i = 0; i < got.length; i++) diff |= got.charCodeAt(i) ^ expected.charCodeAt(i)
+  return diff === 0
+}
+
   if (!PANEL_KEY) return true
   const got = req.headers.get("x-panel-key") || ""
   if (got.length !== PANEL_KEY.length) return false
@@ -200,10 +292,10 @@ function authorized(req) {
   return diff === 0
 }
 
-async function gh(path, opts = {}) {
+async function gh(path, opts = {}, token) {
   const headers = { Accept: "application/vnd.github+json", "User-Agent": "apk2source-worker",
     "X-GitHub-Api-Version": "2022-11-28", ...opts.headers }
-  if (GITHUB_TOKEN) headers.Authorization = `Bearer ${GITHUB_TOKEN}`
+  if (token) headers.Authorization = `Bearer ${token}`
   if (opts.body) headers["Content-Type"] = "application/json"
   const r = await fetch(`${GH_API}${path}`, { method: opts.method || "GET", headers, body: opts.body ? JSON.stringify(opts.body) : undefined })
   const text = await r.text()
