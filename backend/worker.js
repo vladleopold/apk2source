@@ -141,7 +141,7 @@ export default {
     }
 
     // trigger (alias for automation/selftest)
-    if (path === "automation/selftest" || path === "trigger") {
+    if (path === "automation/selftest") {
       if (request.method !== "POST") return fail("POST only", 405)
       if (!GITHUB_TOKEN) return fail("no GITHUB_TOKEN configured", 503)
       if (PANEL_KEY && !authorized(request, PANEL_KEY)) return fail("invalid X-Panel-Key", 401)
