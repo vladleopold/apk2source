@@ -140,20 +140,30 @@ export default {
       } catch (e) { return fail(e.message, e.status || 500) }
     }
 
-    if (path === "automation/selftest") {
+    // trigger (alias for automation/selftest)
+    if (path === "automation/selftest" || path === "trigger") {
       if (request.method !== "POST") return fail("POST only", 405)
       if (!GITHUB_TOKEN) return fail("no GITHUB_TOKEN configured", 503)
       if (PANEL_KEY && !authorized(request, PANEL_KEY)) return fail("invalid X-Panel-Key", 401)
-      const body = await request.json()
+      const body = await request.json().catch(() => ({}))
       const game = (body.game_name || "apk2source-selftest").slice(0, 120)
       try {
-        await gh(`/repos/${REPO}/actions/workflows/automation.yml/dispatches`, GITHUB_TOKEN, {
-          method: "POST", body: { ref: (body.ref || "main").slice(0, 100),
-            inputs: { action: "selftest", game_name: game } }
+        const r = await fetch(`${GH_API}/repos/${REPO}/actions/workflows/automation.yml/dispatches`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, "Content-Type": "application/json",
+            "Accept": "application/vnd.github+json", "User-Agent": "apk2source-worker" },
+          body: JSON.stringify({ ref: (body.ref || "main").slice(0, 100),
+            inputs: { action: "selftest", game_name: game } })
         })
+        if (!r.ok) {
+          const t = await r.text()
+          let msg = t.slice(0, 500)
+          try { msg = JSON.parse(t).message || msg } catch {}
+          return fail(`GitHub API ${r.status}: ${msg}`, r.status)
+        }
         let runUrl = null, runId = null
         try {
-          await new Promise(r => setTimeout(r, 2500))
+          await new Promise(res => setTimeout(res, 2500))
           const data = await gh(`/repos/${REPO}/actions/runs?per_page=5&event=workflow_dispatch`, {}, GITHUB_TOKEN)
           const hit = (data.workflow_runs || [])[0]
           if (hit) { runUrl = hit.html_url; runId = String(hit.id) }
@@ -386,6 +396,13 @@ export default {
 
 // helpers
 function authorized(req, panelKey) {
+  if (!panelKey) return true
+  const got = req.headers.get("x-panel-key") || ""
+  if (got.length !== panelKey.length) return false
+  let diff = 0
+  for (let i = 0; i < panelKey.length; i++) diff |= panelKey.charCodeAt(i) ^ got.charCodeAt(i)
+  return diff === 0
+}
 async function verifySig(sig, secret, request) {
   if (!sig || !secret) return false
   const raw = await request.clone().arrayBuffer()
@@ -401,14 +418,6 @@ async function verifySig(sig, secret, request) {
   return diff === 0
 }
 
-  if (!panelKey) return true
-  const got = req.headers.get("x-panel-key") || ""
-  if (got.length !== panelKey.length) return false
-  let diff = 0
-  for (let i = 0; i < panelKey.length; i++) diff |= panelKey.charCodeAt(i) ^ got.charCodeAt(i)
-  return diff === 0
-}
-
 async function gh(path, opts = {}, token) {
   const headers = { Accept: "application/vnd.github+json", "User-Agent": "apk2source-worker",
     "X-GitHub-Api-Version": "2022-11-28", ...opts.headers }
@@ -418,7 +427,8 @@ async function gh(path, opts = {}, token) {
   const text = await r.text()
   if (!r.ok) { let msg = text.slice(0, 500); try { msg = JSON.parse(text).message || msg } catch {}
     const e = new Error(`GitHub API ${r.status}: ${msg}`); e.status = r.status; throw e }
-  return text ? JSON.parse(text) : null
+  if (!text) return null
+  try { return JSON.parse(text) } catch { return text }
 }
 
 function corsResponse(body, headers = {}) {
@@ -432,6 +442,7 @@ function corsResponse(body, headers = {}) {
 function fail(message, status = 500, extra = {}) {
   return new Response(JSON.stringify({ ok: false, error: message, ...extra }), {
     status, headers: { "Content-Type": "application/json; charset=utf-8",
-      "Access-Control-Allow-Origin": "*" }
+      "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, X-Panel-Key" }
   })
 }
