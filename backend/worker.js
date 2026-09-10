@@ -111,7 +111,7 @@ export default {
       const allowed = new Set([env.APK2SOURCE_SPINE_REPO, env.APK2SOURCE_SOURCE_REPO, REPO])
       if (!allowed.has(repo)) return fail(`repo not allowed: ${repo}`, 403)
       try {
-        const data = await gh(`/repos/${repo}/contents/${encodeURIComponent(treePath)}?ref=${encodeURIComponent(ref)}`)
+        const data = await gh(`/repos/${repo}/contents/${encodeURIComponent(treePath)}?ref=${encodeURIComponent(ref)}`, GITHUB_TOKEN)
         const list = Array.isArray(data) ? data : [data]
         return corsResponse({ ok: true, repo, path: treePath, ref,
           entries: list.map(e => ({ name: e.name, path: e.path, type: e.type === "dir" ? "dir" : "file",
@@ -218,7 +218,7 @@ export default {
       if (!inputs.url && workflow === "pipeline.yml") return fail("inputs.url required", 400)
       if (!inputs.game_name && workflow === "pipeline.yml") return fail("inputs.game_name required", 400)
       try {
-        await gh(`/repos/${REPO}/actions/workflows/${workflow}/dispatches`, {
+        await gh(`/repos/${REPO}/actions/workflows/${workflow}/dispatches`, GITHUB_TOKEN, {
           method: "POST", body: { ref: (body.ref || "main").slice(0, 100), inputs }
         })
         // Find the run we just created
@@ -249,7 +249,7 @@ export default {
         spine_repo: (body.spine_repo || "leaopold/source_spine").slice(0, 120),
         source_repo: (body.source_repo || "leaopold/game_source").slice(0, 120) }
       try {
-        await gh(`/repos/${REPO}/actions/workflows/stage.yml/dispatches`, {
+        await gh(`/repos/${REPO}/actions/workflows/stage.yml/dispatches`, GITHUB_TOKEN, {
           method: "POST", body: { ref: (body.ref || "main").slice(0, 100), inputs }
         })
         let runUrl = null, runId = null
