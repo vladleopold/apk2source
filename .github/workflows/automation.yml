@@ -1,0 +1,95 @@
+name: Automation
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+    - cron: "17 3 * * *"
+  repository_dispatch:
+    types:
+      - pipeline-run
+      - stage-run
+      - selftest-run
+      - status-check
+  workflow_dispatch:
+    inputs:
+      action:
+        type: choice
+        options: [selftest, status, full-pipeline]
+        default: selftest
+      game_name:
+        default: apk2source-selftest
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  WORK: ${{ github.workspace }}/work
+
+jobs:
+  selftest:
+    name: Automated selftest
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.action == 'selftest') || (github.event_name == 'repository_dispatch' && github.event.action == 'selftest-run') || (github.event_name == 'schedule') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: python -m pip install --quiet -e ./tools
+      - name: Run selftest
+        run: apk2source selftest --work "${{ env.WORK }}" --game "${{ github.event.inputs.game_name || github.event.client_payload.game_name || 'apk2source-selftest' }}"
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selftest-${{ github.run_number }}
+          path: |
+            ${{ env.WORK }}/selftest.json
+            ${{ env.WORK }}/pipeline.json
+
+  status:
+    name: Status report
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.action == 'status') || (github.event_name == 'repository_dispatch' && github.event.action == 'status-check') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Gather status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${{ env.WORK }}/status"
+          python3 -c "
+          import json, os, subprocess, datetime
+          repo = os.environ['GITHUB_REPOSITORY']
+          token = os.environ.get('GH_TOKEN', '')
+          def gh(path):
+              cmd = ['curl', '-sS', '-H', f'Authorization: Bearer {token}', '-H', 'Accept: application/vnd.github+json', f'https://api.github.com{path}']
+              try:
+                  out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                  return json.loads(out.stdout) if out.stdout else {}
+              except Exception as e:
+                  return {'error': str(e)}
+          runs = gh(f'/repos/{repo}/actions/runs?per_page=10&branch=main') or {}
+          wfs = gh(f'/repos/{repo}/actions/workflows') or {}
+          report = {
+              'schema': 1,
+              'generated_at': datetime.datetime.utcnow().isoformat() + 'Z',
+              'repository': repo,
+              'workflows': [{'name': w.get('name'), 'state': w.get('state')} for w in (wfs.get('workflows') or [])],
+              'recent_runs': [{'id': r.get('id'), 'name': r.get('name'), 'status': r.get('status'), 'conclusion': r.get('conclusion'), 'html_url': r.get('html_url')} for r in (runs.get('workflow_runs') or [])[:10]],
+          }
+          os.makedirs(os.environ['WORK'] + '/status', exist_ok=True)
+          json.dump(report, open(os.environ['WORK'] + '/status/system.json', 'w'), indent=2)
+          print(json.dumps(report, indent=2))
+          "
+      - name: Upload status
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: status-${{ github.run_number }}
+          path: ${{ env.WORK }}/status/system.json
