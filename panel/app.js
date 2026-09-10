@@ -10,7 +10,7 @@
   const LS_BACKEND = "apk2source.backend";
   const LS_KEY = "apk2source.key";
   const DEFAULT_BACKENDS = [
-    "https://apk2source-api.vercel.app",
+    "https://apk2source-api.leopolds2010.workers.dev",
     "http://localhost:3000",
   ];
 
@@ -20,7 +20,7 @@
   const state = {
     config: {},
     backend: localStorage.getItem(LS_BACKEND) || "",
-    key: localStorage.getItem(LS_KEY) || "",
+    key: localStorage.getItem(LS_KEY) || "d6d0e1b39714d1304018c209bbf0e352d57b99ff6de02eac",
     backendOk: false,
     runs: [],
     timer: null,
