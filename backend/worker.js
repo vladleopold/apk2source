@@ -124,6 +124,25 @@ export default {
     }
 
     // ---------------------------------------------------------------- automation
+    if (path === "automation/status") {
+      try {
+        const [wfData, runsData] = await Promise.all([
+          gh(`/repos/${REPO}/actions/workflows`, {}, GITHUB_TOKEN),
+          gh(`/repos/${REPO}/actions/runs?per_page=10&branch=main`, {}, GITHUB_TOKEN),
+        ])
+        const workflows = (wfData.workflows || []).map(w => ({ name: w.name, state: w.state, path: w.path }))
+        const recent = (runsData.workflow_runs || []).map(r => ({
+          id: r.id, name: r.name, status: r.status, conclusion: r.conclusion,
+          event: r.event, html_url: r.html_url, created_at: r.created_at
+        }))
+        return corsResponse({ ok: true, repository: REPO, generated_at: new Date().toISOString(),
+          workflows, recent_runs: recent }, {})
+      } catch (e) { return fail(e.message, e.status || 500) }
+    }
+
+    
+
+    if (path === "automation/notify") {
       if (request.method !== "POST") return fail("POST only", 405)
       if (!GITHUB_TOKEN) return fail("no GITHUB_TOKEN configured", 503)
       if (PANEL_KEY && !authorized(request, PANEL_KEY)) return fail("invalid X-Panel-Key", 401)
@@ -152,6 +171,7 @@ export default {
       const STAGES = new Set(["selftest-run", "status-check", "pipeline-run", "stage-run"])
       if (!STAGES.has(action)) return fail(`unknown webhook action: ${action}`, 400)
       try {
+        await gh(`/repos/${REPO}/actions/workflows/pipeline.yml/dispatches`, GITHUB_TOKEN, {
           method: "POST", body: { ref: (body.ref || "main").slice(0, 100),
             inputs: { action: action === "selftest-run" ? "selftest" : action === "pipeline-run" ? "full-pipeline" : "status",
               game_name: String(body.game_name || "apk2source-selftest").slice(0, 120) } }
