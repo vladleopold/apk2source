@@ -1,0 +1,78 @@
+{
+  "schema": 1,
+  "game": "aliens-zombies-invasion",
+  "run_id": "34538426564",
+  "generated_at": 1789079960.403378,
+  "generated_iso": "2026-09-10T22:39:20Z",
+  "repository": "vladleopold/apk2source",
+  "actor": "vladleopold",
+  "summary": {
+    "engine": null,
+    "unity_version": null,
+    "payload_size": null,
+    "payload_size_human": null,
+    "payload_sha256": null,
+    "cached": null,
+    "package": null,
+    "skeletons": 0,
+    "skeletons_complete": 0,
+    "textures": 0,
+    "spine_bytes": 0,
+    "unity_files": 0,
+    "unity_files_ok": 0,
+    "device_cache_files": 0,
+    "device_cache_bytes": 0,
+    "published": false
+  },
+  "stages": [
+    {
+      "key": "acquire",
+      "workflow": "01-acquire",
+      "description": "Download .apk/.apks (cached or fresh)",
+      "status": "missing",
+      "record": null
+    },
+    {
+      "key": "unpack",
+      "workflow": "02-unpack",
+      "description": "Normalise container -> merged APK tree",
+      "status": "missing",
+      "record": null
+    },
+    {
+      "key": "engine_detect",
+      "workflow": "02b-engine",
+      "description": "Fingerprint engine + Spine signals",
+      "status": "missing",
+      "record": null
+    },
+    {
+      "key": "device_cache",
+      "workflow": "03-device-cache",
+      "description": "Install, first-run, capture runtime cache",
+      "status": "missing",
+      "record": null
+    },
+    {
+      "key": "unity_extract",
+      "workflow": "04-decompile",
+      "description": "Unity binaries -> asset tree",
+      "status": "missing",
+      "record": null
+    },
+    {
+      "key": "spine_extract",
+      "workflow": "05-spine",
+      "description": "Asset tree -> json / atlas / png",
+      "status": "missing",
+      "record": null
+    },
+    {
+      "key": "publish",
+      "workflow": "06-publish",
+      "description": "Push to source_spine / game_source",
+      "status": "missing",
+      "record": null
+    }
+  ]
+}
