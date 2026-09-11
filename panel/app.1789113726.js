@@ -707,33 +707,72 @@
             parts = [];
           }
 
-          // Upload remaining chunks
-          const startIdx = parts.length;
-          for (let i = startIdx; i < totalChunks; i++) {
-            const start = i * CHUNK_SIZE;
-            const end = Math.min(start + CHUNK_SIZE, file.size);
-            const chunk = file.slice(start, end);
-            const partNumber = i + 1;
-
-            setProgress(5 + (i / totalChunks) * 85, `Uploading chunk ${partNumber}/${totalChunks}… ${fmtBytes(start)}-${fmtBytes(end)} / ${fmtBytes(file.size)}`);
-
-            const partResult = await postChunk(key, uploadId, partNumber, chunk);
-
-            parts.push({ part_number: partResult.part_number, etag: partResult.etag });
-
-            // Save progress to localStorage after each chunk
+          // Upload remaining chunks IN PARALLEL (bounded pool).
+          // R2 accepts parts in any order; we sort by partNumber on finish.
+          const CONCURRENCY = 6;
+          const saveProgress = () => {
             try {
+              const done = [];
+              for (let k = 0; k < totalChunks; k++) {
+                if (slotResults[k]) done.push(slotResults[k]);
+              }
+              done.sort((a, b) => a.part_number - b.part_number);
               localStorage.setItem(LS_UPLOAD, JSON.stringify({
                 filename: file.name,
                 file_size: file.size,
                 game_name: gameName,
                 upload_id: uploadId,
                 key: key,
-                completed_parts: parts,
+                completed_parts: done,
                 backend: state.backend,
                 saved_at: Date.now(),
               }));
             } catch {}
+          };
+
+          // Pre-fill slots with already-uploaded parts (resume case).
+          const slotResults = new Array(totalChunks).fill(null);
+          for (const p of parts) {
+            const idx = (typeof p.part_number === "number" ? p.part_number : parseInt(p.part_number, 10)) - 1;
+            if (idx >= 0 && idx < totalChunks) slotResults[idx] = p;
+          }
+          let doneCount = slotResults.filter(Boolean).length;
+          const queue = [];
+          for (let i = 0; i < totalChunks; i++) {
+            if (!slotResults[i]) queue.push(i);
+          }
+
+          const updateParallelProgress = () => {
+            const pct = 5 + (doneCount / totalChunks) * 85;
+            setProgress(pct, `Uploading ${doneCount}/${totalChunks} chunks (${CONCURRENCY} parallel)… ${fmtBytes(doneCount * CHUNK_SIZE)} / ${fmtBytes(file.size)}`);
+          };
+          updateParallelProgress();
+
+          const parallelWorker = async () => {
+            while (queue.length) {
+              if (!fileState.uploading) throw new Error("Upload aborted");
+              const i = queue.shift();
+              const start = i * CHUNK_SIZE;
+              const end = Math.min(start + CHUNK_SIZE, file.size);
+              const chunk = file.slice(start, end);
+              const partNumber = i + 1;
+              const partResult = await postChunk(key, uploadId, partNumber, chunk);
+              slotResults[i] = { part_number: partResult.part_number, etag: partResult.etag };
+              doneCount++;
+              saveProgress();
+              updateParallelProgress();
+            }
+          };
+
+          const laneCount = Math.min(CONCURRENCY, queue.length);
+          const lanes = [];
+          for (let l = 0; l < laneCount; l++) lanes.push(parallelWorker());
+          await Promise.all(lanes);
+
+          parts = slotResults.filter(Boolean);
+          parts.sort((a, b) => a.part_number - b.part_number);
+          if (parts.length !== totalChunks) {
+            throw new Error(`upload incomplete: ${parts.length}/${totalChunks} chunks done`);
           }
 
           // Complete multipart upload
