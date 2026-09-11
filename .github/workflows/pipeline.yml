@@ -353,7 +353,7 @@ jobs:
     name: Device cache capture (API ${{ matrix.api }})
     if: github.event.inputs.run_device_cache == 'true' || github.event.client_payload.run_device_cache == true
     needs: [plan, heavy]
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 180
     continue-on-error: true
     strategy:
@@ -397,8 +397,12 @@ jobs:
           test -n "$APK" || { echo "::error::no APK found"; exit 1; }
           apk2source unpack --input "$APK" --out "$WORK/unpacked" --work "$WORK"
 
-      - name: Enable KVM/hardware acceleration info
-        run: system_profiler SPHardwareDataType | head -20 || true
+      - name: Enable KVM for Android emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          test -e /dev/kvm
 
       - name: AVD cache
         uses: actions/cache@v4
