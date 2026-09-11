@@ -740,11 +740,11 @@
             if (state.key) xhr.setRequestHeader("X-Panel-Key", state.key);
             xhr.timeout = 120000;
 
+            // Overall bar only — no per-chunk text (see updateParallelProgress).
             xhr.upload.addEventListener("progress", (e) => {
               if (e.lengthComputable) {
-                const doneBytes = (partNumber - 1) * CHUNK_SIZE + e.loaded;
-                const pct = 5 + (doneBytes / file.size) * 85;
-                setProgress(pct, `Chunk ${partNumber}: ${fmtBytes(e.loaded)} / ${fmtBytes(e.total)}`);
+                const doneBytes = Math.min((partNumber - 1) * CHUNK_SIZE + e.loaded, file.size);
+                progressFill.style.width = `${5 + (doneBytes / file.size) * 85}%`;
               }
             });
 
@@ -776,11 +776,7 @@
               } catch (e) {
                 lastErr = e;
                 if (/abort/i.test(e.message)) throw e;
-                if (attempt < 4) {
-                  setProgress(5 + ((partNumber - 1) / Math.ceil(file.size / CHUNK_SIZE)) * 85,
-                    `Chunk ${partNumber}: retry ${attempt}/3… (${e.message})`);
-                  await sleep(1000 * attempt);
-                }
+                if (attempt < 4) await sleep(1000 * attempt);
               }
             }
             throw lastErr;
@@ -873,7 +869,8 @@
 
           const updateParallelProgress = () => {
             const pct = 5 + (doneCount / totalChunks) * 85;
-            setProgress(pct, `Uploading ${doneCount}/${totalChunks} chunks (${CONCURRENCY} parallel)… ${fmtBytes(doneCount * CHUNK_SIZE)} / ${fmtBytes(file.size)}`);
+            const doneBytes = Math.min(doneCount * CHUNK_SIZE, file.size);
+            setProgress(pct, `Uploading… ${Math.round(pct)}% · ${fmtBytes(doneBytes)} / ${fmtBytes(file.size)}`);
           };
           updateParallelProgress();
 
