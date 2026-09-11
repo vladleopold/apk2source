@@ -102,8 +102,8 @@ jobs:
           cat > _site/data/config.json <<JSON
           {
             "repository": "${GITHUB_REPOSITORY}",
-            "api_base": "https://apk2source-api.leopolds2010.workers.dev",
-            "backend": "https://apk2source-api.leopolds2010.workers.dev",
+            "api_base": "https://apk2source-api-v3.leopolds2010.workers.dev",
+            "backend": "https://apk2source-api-v3.leopolds2010.workers.dev",
             "spine_repo": "vladleopold/source_spine",
             "source_repo": "vladleopold/game_source",
             "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
