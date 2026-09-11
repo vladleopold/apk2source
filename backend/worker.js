@@ -374,29 +374,16 @@ export default {
           const ts = Date.now()
           const key = `uploads/${slug}/${ts}/${name.replace(/[^A-Za-z0-9._-]/g, "_")}`
 
-          // For files up to 100MB: upload directly to R2 via multipart
+          // Single-shot /api/run is only for files up to 100MB (Worker
+          // request-body limit). Bigger files must use the chunked flow:
+          // /api/upload-url → /api/upload-chunk → /api/upload-finish.
           const MAX_SINGLE = 100 * 1024 * 1024
-          if (file.size <= MAX_SINGLE) {
-            await R2.put(key, file, {
-              httpMetadata: { contentType: file.type || "application/octet-stream" },
-            })
-          } else {
-            // Larger files: use R2 multipart upload
-            const CHUNK = 80 * 1024 * 1024
-            const totalChunks = Math.ceil(file.size / CHUNK)
-            const multipartUpload = await R2.createMultipartUpload(key, {
-              httpMetadata: { contentType: file.type || "application/octet-stream" },
-            })
-            const parts = []
-            for (let i = 0; i < totalChunks; i++) {
-              const start = i * CHUNK
-              const end = Math.min(start + CHUNK, file.size)
-              const chunkBlob = file.slice(start, end)
-              const part = await multipartUpload.uploadPart(i + 1, chunkBlob)
-              parts.push({ partNumber: i + 1, etag: part.etag })
-            }
-            await multipartUpload.complete(parts)
+          if (file.size > MAX_SINGLE) {
+            return fail(`file too large for single-shot upload: ${(file.size / 1024 / 1024).toFixed(1)} MB (max 100 MB) — the panel uploads bigger files in chunks automatically`, 413)
           }
+          await R2.put(key, file, {
+            httpMetadata: { contentType: file.type || "application/octet-stream" },
+          })
 
           // Download URL goes through the Worker's download proxy
           downloadUrl = `${new URL(request.url).origin}/api/download?key=${encodeURIComponent(key)}`

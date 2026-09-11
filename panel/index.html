@@ -53,9 +53,9 @@
 
       <div id="mode-url" class="input-mode">
         <label>
-          <span>Payload URL <b class="req">*</b></span>
+          <span>Payload URL</span>
           <input name="url" type="url" placeholder="https://…/game.apks" autocomplete="off" />
-          <small>.apk / .apks / .xapk / .apkm / .aab</small>
+          <small>Required in Link mode. Not needed if you select a file.</small>
         </label>
 
         <label>
@@ -66,7 +66,7 @@
 
       <div id="mode-file" class="input-mode" hidden>
         <label class="file-drop-zone" id="drop-zone">
-          <input type="file" id="apk-file" name="apk_file" accept=".apk,.apks,.xapk,.apkm,.aab,.zip" hidden />
+          <input type="file" id="apk-file" name="apk_file" class="file-input-visually-hidden" accept=".apk,.apks,.xapk,.apkm,.aab,.zip" />
           <div class="drop-content">
             <span class="drop-icon">📦</span>
             <span class="drop-text">Drop APK here or <b>click to browse</b></span>

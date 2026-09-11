@@ -488,11 +488,9 @@
 
     if (!zone) return;
 
-    zone.addEventListener("click", (e) => {
-      if (e.target === clearBtn || clearBtn.contains(e.target)) return;
-      input.click();
-    });
-
+    // NOTE: #drop-zone is a <label for file input>, so a native click already
+    // opens the file chooser. Do NOT call input.click() here — browsers block
+    // programmatic file dialogs without a trusted user activation.
     zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("dragover"); });
     zone.addEventListener("dragleave", () => { zone.classList.remove("dragover"); });
     zone.addEventListener("drop", (e) => {
@@ -507,6 +505,7 @@
     });
 
     clearBtn.addEventListener("click", (e) => {
+      e.preventDefault();
       e.stopPropagation();
       clearFile();
     });
@@ -550,7 +549,7 @@
         if (raw) {
           const saved = JSON.parse(raw);
           if (saved && saved.filename === file.name && saved.file_size === file.size) {
-            const totalChunks = Math.ceil(file.size / (80 * 1024 * 1024));
+            const totalChunks = Math.ceil(file.size / (8 * 1024 * 1024));
             const completed = saved.completed_parts ? saved.completed_parts.length : 0;
             const pct = totalChunks > 0 ? (completed / totalChunks) * 85 : 0;
             setProgress(pct, `Ready to resume: ${completed}/${totalChunks} chunks done`);
@@ -601,9 +600,63 @@
 
         const file = fileState.file;
         const gameName = $('input[name="game_name"]', $("#run-form")).value || "uploaded-game";
-        const SMALL_FILE_LIMIT = 100 * 1024 * 1024; // 100MB
-        const CHUNK_SIZE = 80 * 1024 * 1024; // 80MB chunks
+        const CHUNK_SIZE = 8 * 1024 * 1024; // 8MB chunks: survives flaky networks, >= R2 5MB part minimum
         const LS_UPLOAD = "apk2source.upload";
+
+        // POST one chunk with retries (survives ERR_CONNECTION_RESET).
+        const postChunk = (key, uploadId, partNumber, chunk) => {
+          const sendOnce = () => new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open("POST", `${state.backend.replace(/\/$/, "")}/api/upload-chunk`);
+            if (state.key) xhr.setRequestHeader("X-Panel-Key", state.key);
+            xhr.timeout = 120000;
+
+            xhr.upload.addEventListener("progress", (e) => {
+              if (e.lengthComputable) {
+                const doneBytes = (partNumber - 1) * CHUNK_SIZE + e.loaded;
+                const pct = 5 + (doneBytes / file.size) * 85;
+                setProgress(pct, `Chunk ${partNumber}: ${fmtBytes(e.loaded)} / ${fmtBytes(e.total)}`);
+              }
+            });
+
+            xhr.addEventListener("load", () => {
+              try {
+                const data = JSON.parse(xhr.responseText);
+                if (xhr.status >= 200 && xhr.status < 300 && data.ok) resolve(data);
+                else reject(new Error(data.error || `HTTP ${xhr.status}`));
+              } catch { reject(new Error(`Chunk upload failed: HTTP ${xhr.status}`)); }
+            });
+            xhr.addEventListener("error", () => reject(new Error("Chunk upload failed — network error")));
+            xhr.addEventListener("timeout", () => reject(new Error("Chunk upload timed out")));
+            xhr.addEventListener("abort", () => reject(new Error("Upload aborted")));
+
+            const formData = new FormData();
+            formData.append("key", key);
+            formData.append("upload_id", uploadId);
+            formData.append("part_number", String(partNumber));
+            formData.append("chunk", chunk, file.name);
+            xhr.send(formData);
+          });
+
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          return (async () => {
+            let lastErr = null;
+            for (let attempt = 1; attempt <= 4; attempt++) {
+              try {
+                return await sendOnce();
+              } catch (e) {
+                lastErr = e;
+                if (/abort/i.test(e.message)) throw e;
+                if (attempt < 4) {
+                  setProgress(5 + ((partNumber - 1) / Math.ceil(file.size / CHUNK_SIZE)) * 85,
+                    `Chunk ${partNumber}: retry ${attempt}/3… (${e.message})`);
+                  await sleep(1000 * attempt);
+                }
+              }
+            }
+            throw lastErr;
+          })();
+        };
 
         setProgress(0, "Preparing upload…");
         fileState.uploading = true;
@@ -626,138 +679,74 @@
           && saved.backend === state.backend;
 
         try {
-          let downloadUrl;
+          // Chunked R2 multipart upload (resumable). Single-shot POSTs die
+          // with ERR_CONNECTION_RESET on big files — small chunks + retries.
+          const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+          let uploadId, key, parts;
 
-          if (file.size <= SMALL_FILE_LIMIT) {
-            // Small file: upload via Worker to GitHub Release
-            localStorage.removeItem(LS_UPLOAD);
-            setProgress(5, "Uploading to GitHub…");
-            const form = new FormData();
-            form.append("file", file);
-            form.append("game_name", gameName);
-
-            const result = await new Promise((resolve, reject) => {
-              const xhr = new XMLHttpRequest();
-              xhr.open("POST", `${state.backend.replace(/\/$/, "")}/api/upload`);
-              if (state.key) xhr.setRequestHeader("X-Panel-Key", state.key);
-
-              xhr.upload.addEventListener("progress", (e) => {
-                if (e.lengthComputable) {
-                  setProgress(5 + (e.loaded / e.total) * 85, `Uploading… ${fmtBytes(e.loaded)} / ${fmtBytes(e.total)}`);
-                }
-              });
-
-              xhr.addEventListener("load", () => {
-                try {
-                  const data = JSON.parse(xhr.responseText);
-                  if (xhr.status >= 200 && xhr.status < 300 && data.ok) resolve(data);
-                  else reject(new Error(data.error || `HTTP ${xhr.status}`));
-                } catch { reject(new Error(`Upload failed: HTTP ${xhr.status}`)); }
-              });
-              xhr.addEventListener("error", () => reject(new Error("Upload failed — network error")));
-              xhr.addEventListener("abort", () => reject(new Error("Upload aborted")));
-              xhr.send(form);
-            });
-            downloadUrl = result.url;
-
+          if (canResume) {
+            uploadId = saved.upload_id;
+            key = saved.key;
+            parts = saved.completed_parts;
+            const resumePct = (parts.length / totalChunks) * 85;
+            setProgress(resumePct, `Resuming from chunk ${parts.length}/${totalChunks}…`);
           } else {
-            // Large file: chunked R2 multipart upload (resumable)
-            const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-            let uploadId, key, parts;
-
-            if (canResume) {
-              uploadId = saved.upload_id;
-              key = saved.key;
-              parts = saved.completed_parts;
-              const resumePct = (parts.length / totalChunks) * 85;
-              setProgress(resumePct, `Resuming from chunk ${parts.length}/${totalChunks}…`);
-            } else {
-              setProgress(2, `Splitting into ${totalChunks} chunks…`);
-              const initResp = await api("/api/upload-url", {
-                method: "POST",
-                body: {
-                  filename: file.name,
-                  game_name: gameName,
-                  content_type: file.type || "application/octet-stream",
-                  file_size: file.size,
-                }
-              });
-              if (!initResp.ok) throw new Error(initResp.error || "failed to initiate upload");
-              uploadId = initResp.upload_id;
-              key = initResp.key;
-              parts = [];
-            }
-
-            // Upload remaining chunks
-            const startIdx = parts.length;
-            for (let i = startIdx; i < totalChunks; i++) {
-              const start = i * CHUNK_SIZE;
-              const end = Math.min(start + CHUNK_SIZE, file.size);
-              const chunk = file.slice(start, end);
-              const partNumber = i + 1;
-
-              setProgress(5 + (i / totalChunks) * 85, `Uploading chunk ${partNumber}/${totalChunks}… ${fmtBytes(start)}-${fmtBytes(end)} / ${fmtBytes(file.size)}`);
-
-              const formData = new FormData();
-              formData.append("key", key);
-              formData.append("upload_id", uploadId);
-              formData.append("part_number", String(partNumber));
-              formData.append("chunk", chunk, file.name);
-
-              const partResult = await new Promise((resolve, reject) => {
-                const xhr = new XMLHttpRequest();
-                xhr.open("POST", `${state.backend.replace(/\/$/, "")}/api/upload-chunk`);
-                if (state.key) xhr.setRequestHeader("X-Panel-Key", state.key);
-
-                xhr.upload.addEventListener("progress", (e) => {
-                  if (e.lengthComputable) {
-                    const chunkPct = (e.loaded / e.total) * (85 / totalChunks);
-                    const basePct = 5 + (i / totalChunks) * 85;
-                    setProgress(basePct + chunkPct, `Chunk ${partNumber}/${totalChunks}: ${fmtBytes(e.loaded)} / ${fmtBytes(e.total)}`);
-                  }
-                });
-
-                xhr.addEventListener("load", () => {
-                  try {
-                    const data = JSON.parse(xhr.responseText);
-                    if (xhr.status >= 200 && xhr.status < 300 && data.ok) resolve(data);
-                    else reject(new Error(data.error || `HTTP ${xhr.status}`));
-                  } catch { reject(new Error(`Chunk upload failed: HTTP ${xhr.status}`)); }
-                });
-                xhr.addEventListener("error", () => reject(new Error("Chunk upload failed — network error")));
-                xhr.addEventListener("abort", () => reject(new Error("Upload aborted")));
-                xhr.send(formData);
-              });
-
-              parts.push({ part_number: partResult.part_number, etag: partResult.etag });
-
-              // Save progress to localStorage after each chunk
-              try {
-                localStorage.setItem(LS_UPLOAD, JSON.stringify({
-                  filename: file.name,
-                  file_size: file.size,
-                  game_name: gameName,
-                  upload_id: uploadId,
-                  key: key,
-                  completed_parts: parts,
-                  backend: state.backend,
-                  saved_at: Date.now(),
-                }));
-              } catch {}
-            }
-
-            // Complete multipart upload
-            setProgress(92, "Finalizing upload…");
-            localStorage.removeItem(LS_UPLOAD);
-
-            const finishResp = await api("/api/upload-finish", {
+            setProgress(2, `Splitting into ${totalChunks} chunks…`);
+            const initResp = await api("/api/upload-url", {
               method: "POST",
-              body: { key, upload_id: uploadId, parts }
+              body: {
+                filename: file.name,
+                game_name: gameName,
+                content_type: file.type || "application/octet-stream",
+                file_size: file.size,
+              }
             });
-            if (!finishResp.ok) throw new Error(finishResp.error || "failed to finalize upload");
-
-            downloadUrl = `${state.backend.replace(/\/$/, "")}/api/download?key=${encodeURIComponent(key)}`;
+            if (!initResp || !initResp.ok) throw new Error((initResp && initResp.error) || "failed to initiate upload");
+            uploadId = initResp.upload_id;
+            key = initResp.key;
+            parts = [];
           }
+
+          // Upload remaining chunks
+          const startIdx = parts.length;
+          for (let i = startIdx; i < totalChunks; i++) {
+            const start = i * CHUNK_SIZE;
+            const end = Math.min(start + CHUNK_SIZE, file.size);
+            const chunk = file.slice(start, end);
+            const partNumber = i + 1;
+
+            setProgress(5 + (i / totalChunks) * 85, `Uploading chunk ${partNumber}/${totalChunks}… ${fmtBytes(start)}-${fmtBytes(end)} / ${fmtBytes(file.size)}`);
+
+            const partResult = await postChunk(key, uploadId, partNumber, chunk);
+
+            parts.push({ part_number: partResult.part_number, etag: partResult.etag });
+
+            // Save progress to localStorage after each chunk
+            try {
+              localStorage.setItem(LS_UPLOAD, JSON.stringify({
+                filename: file.name,
+                file_size: file.size,
+                game_name: gameName,
+                upload_id: uploadId,
+                key: key,
+                completed_parts: parts,
+                backend: state.backend,
+                saved_at: Date.now(),
+              }));
+            } catch {}
+          }
+
+          // Complete multipart upload
+          setProgress(92, "Finalizing upload…");
+          localStorage.removeItem(LS_UPLOAD);
+
+          const finishResp = await api("/api/upload-finish", {
+            method: "POST",
+            body: { key, upload_id: uploadId, parts }
+          });
+          if (!finishResp || !finishResp.ok) throw new Error((finishResp && finishResp.error) || "failed to finalize upload");
+
+          const downloadUrl = `${state.backend.replace(/\/$/, "")}/api/download?key=${encodeURIComponent(key)}`;
 
           setProgress(100, "Upload complete!");
           localStorage.removeItem(LS_UPLOAD);
@@ -797,58 +786,105 @@
 
       btn.disabled = true;
 
-      // --- FILE MODE: send everything to Worker /api/run ---
-      // Worker saves to R2 + dispatches pipeline. Browser can close after.
+      // --- FILE MODE ---
+      // Small files: single POST to /api/run (Worker saves to R2 + dispatches).
+      // Large files: chunked R2 multipart upload (page must stay open during
+      // upload, refresh+resume works), then dispatch via /api/trigger.
+      // After dispatch the pipeline runs on GitHub Actions — page can close.
       if (hasFile) {
-        setMsg(msg, "Uploading & dispatching… (you can close this page after)", "");
+        const SINGLE_SHOT_LIMIT = 10 * 1024 * 1024; // one POST only for tiny files; bigger files go chunked
+        const buildCommonInputs = (url) => {
+          const inputs = { url, game_name: gameName };
+          if (fd.get("url_fallback")) inputs.url_fallback = fd.get("url_fallback");
+          if (fd.get("sha256")) inputs.sha256 = fd.get("sha256");
+          inputs.use_cache = fd.get("use_cache") || "true";
+          inputs.run_device_cache = fd.get("run_device_cache") || "false";
+          inputs.run_java_decompile = fd.get("run_java_decompile") || "true";
+          inputs.run_il2cpp = fd.get("run_il2cpp") || "true";
+          inputs.run_assetripper = fd.get("run_assetripper") || "true";
+          inputs.publish_spine = fd.get("publish_spine") || "true";
+          inputs.publish_game_source = fd.get("publish_game_source") || "false";
+          inputs.runner = fd.get("runner") || "ubuntu-latest";
+          inputs.spine_repo = fd.get("spine_repo") || "leaopold/source_spine";
+          inputs.source_repo = fd.get("source_repo") || "leaopold/game_source";
+          inputs.max_texture_side = fd.get("max_texture_side") || "0";
+          $$('input[type=checkbox]', form).forEach((c) => { inputs[c.name] = c.checked ? "true" : "false"; });
+          inputs.game_name = gameName;
+          return inputs;
+        };
+
+        if (fileState.file.size <= SINGLE_SHOT_LIMIT) {
+          setMsg(msg, "Uploading & dispatching…", "");
+          try {
+            const runFd = new FormData();
+            runFd.append("file", fileState.file);
+            runFd.append("game_name", gameName);
+            if (fd.get("url_fallback")) runFd.append("url_fallback", fd.get("url_fallback"));
+            if (fd.get("sha256")) runFd.append("sha256", fd.get("sha256"));
+            runFd.append("use_cache", fd.get("use_cache") || "true");
+            runFd.append("run_device_cache", fd.get("run_device_cache") || "false");
+            runFd.append("run_java_decompile", fd.get("run_java_decompile") || "true");
+            runFd.append("run_il2cpp", fd.get("run_il2cpp") || "true");
+            runFd.append("run_assetripper", fd.get("run_assetripper") || "true");
+            runFd.append("publish_spine", fd.get("publish_spine") || "true");
+            runFd.append("publish_game_source", fd.get("publish_game_source") || "false");
+            runFd.append("runner", fd.get("runner") || "ubuntu-latest");
+            runFd.append("spine_repo", fd.get("spine_repo") || "leaopold/source_spine");
+            runFd.append("source_repo", fd.get("source_repo") || "leaopold/game_source");
+            runFd.append("max_texture_side", fd.get("max_texture_side") || "0");
+
+            const result = await new Promise((resolve, reject) => {
+              const xhr = new XMLHttpRequest();
+              xhr.open("POST", `${state.backend.replace(/\/$/, "")}/api/run`);
+              if (state.key) xhr.setRequestHeader("X-Panel-Key", state.key);
+
+              xhr.upload.addEventListener("progress", (e) => {
+                if (e.lengthComputable) {
+                  const pct = Math.round((e.loaded / e.total) * 100);
+                  setMsg(msg, `Uploading ${fmtBytes(e.loaded)} / ${fmtBytes(e.total)} (${pct}%)…`, "");
+                }
+              });
+
+              xhr.addEventListener("load", () => {
+                try {
+                  const data = JSON.parse(xhr.responseText);
+                  if (xhr.status >= 200 && xhr.status < 300 && data.ok) resolve(data);
+                  else reject(new Error(data.error || `HTTP ${xhr.status}`));
+                } catch { reject(new Error(`Request failed: HTTP ${xhr.status}`)); }
+              });
+              xhr.addEventListener("error", () => reject(new Error("Network error")));
+              xhr.addEventListener("abort", () => reject(new Error("Aborted")));
+              xhr.send(runFd);
+            });
+
+            // Clear upload state
+            localStorage.removeItem("apk2source.upload");
+            fileState.file = null;
+            fileState.uploadedUrl = null;
+
+            const runLink = result.run_url ? `<a href="${esc(result.run_url)}" target="_blank">Open pipeline →</a>` : "";
+            setMsg(msg, `✓ Done! Pipeline dispatched. You can close this page. ${runLink}`, "ok");
+            setTimeout(loadRuns, 8000);
+          } catch (e) {
+            setMsg(msg, `Error: ${e.message}`, "err");
+          } finally {
+            btn.disabled = false;
+          }
+          return;
+        }
+
+        // Large file: chunked upload first (keep page open; refresh resumes),
+        // then dispatch — after dispatch the page can be closed.
+        setMsg(msg, "Uploading large file in chunks — keep this page open (refresh resumes)…", "");
         try {
-          const runFd = new FormData();
-          runFd.append("file", fileState.file);
-          runFd.append("game_name", gameName);
-          if (fd.get("url_fallback")) runFd.append("url_fallback", fd.get("url_fallback"));
-          if (fd.get("sha256")) runFd.append("sha256", fd.get("sha256"));
-          runFd.append("use_cache", fd.get("use_cache") || "true");
-          runFd.append("run_device_cache", fd.get("run_device_cache") || "false");
-          runFd.append("run_java_decompile", fd.get("run_java_decompile") || "true");
-          runFd.append("run_il2cpp", fd.get("run_il2cpp") || "true");
-          runFd.append("run_assetripper", fd.get("run_assetripper") || "true");
-          runFd.append("publish_spine", fd.get("publish_spine") || "true");
-          runFd.append("publish_game_source", fd.get("publish_game_source") || "false");
-          runFd.append("runner", fd.get("runner") || "ubuntu-latest");
-          runFd.append("spine_repo", fd.get("spine_repo") || "leaopold/source_spine");
-          runFd.append("source_repo", fd.get("source_repo") || "leaopold/game_source");
-          runFd.append("max_texture_side", fd.get("max_texture_side") || "0");
-
-          const result = await new Promise((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
-            xhr.open("POST", `${state.backend.replace(/\/$/, "")}/api/run`);
-            if (state.key) xhr.setRequestHeader("X-Panel-Key", state.key);
-
-            xhr.upload.addEventListener("progress", (e) => {
-              if (e.lengthComputable) {
-                const pct = Math.round((e.loaded / e.total) * 100);
-                setMsg(msg, `Uploading ${fmtBytes(e.loaded)} / ${fmtBytes(e.total)} (${pct}%)…`, "");
-              }
-            });
-
-            xhr.addEventListener("load", () => {
-              try {
-                const data = JSON.parse(xhr.responseText);
-                if (xhr.status >= 200 && xhr.status < 300 && data.ok) resolve(data);
-                else reject(new Error(data.error || `HTTP ${xhr.status}`));
-              } catch { reject(new Error(`Request failed: HTTP ${xhr.status}`)); }
-            });
-            xhr.addEventListener("error", () => reject(new Error("Network error")));
-            xhr.addEventListener("abort", () => reject(new Error("Aborted")));
-            xhr.send(runFd);
-          });
-
-          // Clear upload state
+          const downloadUrl = await window.__apk2sourceFileUpload.upload();
+          setMsg(msg, "Upload complete. Dispatching pipeline…", "ok");
+          const inputs = buildCommonInputs(downloadUrl);
+          const r = await api("/api/trigger", { method: "POST", body: { workflow: "pipeline.yml", inputs } });
           localStorage.removeItem("apk2source.upload");
           fileState.file = null;
           fileState.uploadedUrl = null;
-
-          const runLink = result.run_url ? `<a href="${esc(result.run_url)}" target="_blank">Open pipeline →</a>` : "";
+          const runLink = r.run_url ? `<a href="${esc(r.run_url)}" target="_blank">Open pipeline →</a>` : "";
           setMsg(msg, `✓ Done! Pipeline dispatched. You can close this page. ${runLink}`, "ok");
           setTimeout(loadRuns, 8000);
         } catch (e) {
@@ -950,7 +986,7 @@
         dropZone.classList.add("has-file");
 
         // Show progress
-        const totalChunks = Math.ceil((saved.file_size || 0) / (80 * 1024 * 1024));
+        const totalChunks = Math.ceil((saved.file_size || 0) / (8 * 1024 * 1024));
         const completed = saved.completed_parts ? saved.completed_parts.length : 0;
         const pct = totalChunks > 0 ? (completed / totalChunks) * 100 : 0;
         if (progress) progress.hidden = false;
