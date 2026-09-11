@@ -9,8 +9,8 @@
   const LS_BACKEND = "apk2source.backend";
   const LS_KEY = "apk2source.key";
   const REPO = "vladleopold/apk2source";
-  const SPINE_REPO = "leaopold/source_spine";
-  const SOURCE_REPO = "leaopold/game_source";
+  const SPINE_REPO = "vladleopold/source_spine";
+  const SOURCE_REPO = "vladleopold/game_source";
 
   const DEFAULT_BACKENDS = [
     "https://apk2source-api-v3.leopolds2010.workers.dev",
@@ -552,7 +552,7 @@
   async function loadSpine() {
     const tree = $("#spine-tree");
     const sel = $("#spine-repo-select");
-    const repos = [state.config.spine_repo || "leaopold/source_spine", state.config.source_repo || "leaopold/game_source"];
+    const repos = [state.config.spine_repo || "vladleopold/source_spine", state.config.source_repo || "vladleopold/game_source"];
     if (!sel.options.length) {
       sel.innerHTML = repos.map((r) => `<option value="${esc(r)}">${esc(r)}</option>`).join("");
       sel.addEventListener("change", loadSpine);
@@ -1072,8 +1072,8 @@
             runFd.append("publish_spine", "true");
             runFd.append("publish_game_source", "true");
             runFd.append("runner", fd.get("runner") || "ubuntu-latest");
-            runFd.append("spine_repo", fd.get("spine_repo") || "leaopold/source_spine");
-            runFd.append("source_repo", fd.get("source_repo") || "leaopold/game_source");
+            runFd.append("spine_repo", fd.get("spine_repo") || "vladleopold/source_spine");
+            runFd.append("source_repo", fd.get("source_repo") || "vladleopold/game_source");
             runFd.append("max_texture_side", fd.get("max_texture_side") || "0");
 
             const result = await new Promise((resolve, reject) => {

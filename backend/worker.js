@@ -386,8 +386,8 @@ export default {
         const publishSpine = formData.get("publish_spine") !== "false"
         const publishGameSource = formData.get("publish_game_source") === "true"
         const runner = (formData.get("runner") || "ubuntu-latest").slice(0, 60)
-        const spineRepo = (formData.get("spine_repo") || "leaopold/source_spine").slice(0, 120)
-        const sourceRepo = (formData.get("source_repo") || "leaopold/game_source").slice(0, 120)
+        const spineRepo = (formData.get("spine_repo") || "vladleopold/source_spine").slice(0, 120)
+        const sourceRepo = (formData.get("source_repo") || "vladleopold/game_source").slice(0, 120)
         const maxTextureSide = (formData.get("max_texture_side") || "0").slice(0, 10)
 
         // --- Step 1: Save file to R2 ---
@@ -786,8 +786,8 @@ export default {
         game_name: (body.game_name || "apk2source-selftest").slice(0, 120),
         use_cache: body.use_cache === false ? "false" : "true",
         runner: (body.runner || "ubuntu-latest").slice(0, 60),
-        spine_repo: (body.spine_repo || "leaopold/source_spine").slice(0, 120),
-        source_repo: (body.source_repo || "leaopold/game_source").slice(0, 120) }
+        spine_repo: (body.spine_repo || "vladleopold/source_spine").slice(0, 120),
+        source_repo: (body.source_repo || "vladleopold/game_source").slice(0, 120) }
       try {
         await gh(`/repos/${REPO}/actions/workflows/stage.yml/dispatches`, {
           method: "POST", body: { ref: (body.ref || "main").slice(0, 100), inputs }

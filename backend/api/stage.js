@@ -32,8 +32,8 @@ export default async function handler(req, res) {
     game_name: String(body.game_name || "apk2source-selftest").slice(0, 120),
     use_cache: body.use_cache === false ? "false" : "true",
     runner: String(body.runner || "ubuntu-latest").slice(0, 60),
-    spine_repo: String(body.spine_repo || "leaopold/source_spine").slice(0, 120),
-    source_repo: String(body.source_repo || "leaopold/game_source").slice(0, 120),
+    spine_repo: String(body.spine_repo || "vladleopold/source_spine").slice(0, 120),
+    source_repo: String(body.source_repo || "vladleopold/game_source").slice(0, 120),
   };
 
   try {

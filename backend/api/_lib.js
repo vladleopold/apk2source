@@ -18,15 +18,15 @@ export function token() {
 }
 
 export function repo() {
-  return env("APK2SOURCE_REPO", "leaopold/apk2source");
+  return env("APK2SOURCE_REPO", "vladleopold/apk2source");
 }
 
 export function spineRepo() {
-  return env("APK2SOURCE_SPINE_REPO", "leaopold/source_spine");
+  return env("APK2SOURCE_SPINE_REPO", "vladleopold/source_spine");
 }
 
 export function sourceRepo() {
-  return env("APK2SOURCE_SOURCE_REPO", "leaopold/game_source");
+  return env("APK2SOURCE_SOURCE_REPO", "vladleopold/game_source");
 }
 
 export function json(res, status, body) {

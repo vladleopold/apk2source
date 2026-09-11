@@ -69,10 +69,10 @@ on:
         default: false
       spine_repo:
         description: "Destination repo for Spine assets"
-        default: "leaopold/source_spine"
+        default: "vladleopold/source_spine"
       source_repo:
         description: "Destination repo for the reconstructed Unity project"
-        default: "leaopold/game_source"
+        default: "vladleopold/game_source"
       max_texture_side:
         description: "Downscale textures above this many px (0 = keep original)"
         default: "0"
@@ -181,8 +181,8 @@ jobs:
           out("use_cache", pick("IN_CACHE", "use_cache", "true"))
           out("runner", pick("IN_RUNNER", "runner", "ubuntu-latest"))
           out("max_texture_side", pick("IN_MAXTEX", "max_texture_side", "0"))
-          out("spine_repo", pick("IN_SPINE_REPO", "spine_repo", "leaopold/source_spine"))
-          out("source_repo", pick("IN_SOURCE_REPO", "source_repo", "leaopold/game_source"))
+          out("spine_repo", pick("IN_SPINE_REPO", "spine_repo", "vladleopold/source_spine"))
+          out("source_repo", pick("IN_SOURCE_REPO", "source_repo", "vladleopold/game_source"))
           print(f"::notice::plan game={slug(game)} url_hash={hashlib.sha256(url.encode()).hexdigest()[:16]}")
           PY
 

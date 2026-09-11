@@ -46,9 +46,9 @@ on:
         description: "Runner label"
         default: "ubuntu-latest"
       spine_repo:
-        default: "leaopold/source_spine"
+        default: "vladleopold/source_spine"
       source_repo:
-        default: "leaopold/game_source"
+        default: "vladleopold/game_source"
 
   workflow_call:
     inputs:
@@ -69,10 +69,10 @@ on:
         default: "ubuntu-latest"
       spine_repo:
         type: string
-        default: "leaopold/source_spine"
+        default: "vladleopold/source_spine"
       source_repo:
         type: string
-        default: "leaopold/game_source"
+        default: "vladleopold/game_source"
     secrets:
       PUBLISH_TOKEN:
         required: false
