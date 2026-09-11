@@ -323,6 +323,97 @@ export default {
           headers: Object.fromEntries(r.headers.entries()),
         }, {})
       }
+    // ---------------------------------------------------------------- file upload
+    if (path === "upload") {
+      if (request.method !== "POST") return fail("POST only", 405)
+      if (!GITHUB_TOKEN) return fail("no GITHUB_TOKEN configured", 503)
+      if (PANEL_KEY && !authorized(request, PANEL_KEY)) return fail("invalid X-Panel-Key", 401)
+
+      const contentType = request.headers.get("content-type") || ""
+      if (!contentType.includes("multipart/form-data")) {
+        return fail("content-type must be multipart/form-data", 415)
+      }
+
+      try {
+        const formData = await request.formData()
+        const file = formData.get("file")
+        const gameName = (formData.get("game_name") || "uploaded-game").slice(0, 120)
+
+        if (!file || typeof file === "string") {
+          return fail("no file provided", 400)
+        }
+
+        // Validate file extension
+        const name = file.name || "upload.apk"
+        const ext = name.split(".").pop().toLowerCase()
+        const ALLOWED = new Set(["apk", "apks", "xapk", "apkm", "aab", "zip"])
+        if (!ALLOWED.has(ext)) {
+          return fail(`file type .${ext} not allowed — expected apk/apks/xapk/apkm/aab/zip`, 400)
+        }
+
+        // Max 100MB (Cloudflare Worker body limit)
+        const MAX_SIZE = 100 * 1024 * 1024
+        if (file.size > MAX_SIZE) {
+          return fail(`file too large: ${(file.size / 1024 / 1024).toFixed(1)} MB (max 100 MB)`, 413)
+        }
+
+        const slug = gameName.replace(/[^A-Za-z0-9._-]/g, "-").replace(/-{2,}/g, "-").slice(0, 60)
+        const ts = Date.now()
+        const tag = `upload/${slug}/${ts}`
+        const safeName = name.replace(/[^A-Za-z0-9._-]/g, "_")
+
+        // Create a release
+        const releaseData = await gh(`/repos/${REPO}/releases`, {
+          method: "POST",
+          body: {
+            tag_name: tag,
+            name: `Upload: ${gameName}`,
+            draft: false,
+            prerelease: false,
+            make_latest: "false",
+          }
+        }, GITHUB_TOKEN)
+
+        // Upload the asset to the release
+        const uploadUrl = releaseData.upload_url.replace(/\{.*\}/, `?name=${encodeURIComponent(safeName)}`)
+        const arrayBuf = await file.arrayBuffer()
+
+        const uploadResp = await fetch(uploadUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${GITHUB_TOKEN}`,
+            "Content-Type": "application/octet-stream",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+          },
+          body: arrayBuf,
+        })
+
+        if (!uploadResp.ok) {
+          const errText = await uploadResp.text()
+          return fail(`asset upload failed: ${uploadResp.status} ${errText.slice(0, 300)}`, 502)
+        }
+
+        const assetData = await uploadResp.json()
+        const downloadUrl = assetData.browser_download_url || assetData.url
+
+        // Clean up: delete the release after a while (best-effort, not blocking)
+        // The release + asset will be cleaned up by the pipeline or manually
+
+        return corsResponse({
+          ok: true,
+          url: downloadUrl,
+          release_id: releaseData.id,
+          tag,
+          asset_id: assetData.id,
+          filename: safeName,
+          size: file.size,
+        }, {})
+      } catch (e) {
+        return fail(`upload error: ${e.message}`, 500)
+      }
+    }
+
     // Workflow dispatch
     if (path === "trigger") {
       if (request.method !== "POST") return fail("POST only", 405)

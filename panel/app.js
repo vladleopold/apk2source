@@ -442,6 +442,153 @@
     });
   }
 
+  // ---------------------------------------------------------------- file upload state
+  const fileState = { mode: "url", file: null, uploadedUrl: null, uploading: false };
+
+  function initInputMode() {
+    const btns = $$(".mode-btn");
+    btns.forEach((b) => b.addEventListener("click", () => {
+      btns.forEach((x) => x.classList.remove("active"));
+      b.classList.add("active");
+      fileState.mode = b.dataset.mode;
+      const urlMode = $("#mode-url");
+      const fileMode = $("#mode-file");
+      if (fileState.mode === "url") {
+        urlMode.hidden = false;
+        fileMode.hidden = true;
+        $('input[name="url"]', $("#run-form")).setAttribute("required", "");
+      } else {
+        urlMode.hidden = true;
+        fileMode.hidden = false;
+        $('input[name="url"]', $("#run-form")).removeAttribute("required");
+      }
+    }));
+  }
+
+  function initFileDrop() {
+    const zone = $("#drop-zone");
+    const input = $("#apk-file");
+    const selected = $("#drop-selected");
+    const fileName = $("#drop-file-name");
+    const fileSize = $("#drop-file-size");
+    const clearBtn = $("#drop-clear");
+    const progress = $("#upload-progress");
+    const progressFill = $("#progress-fill");
+    const progressText = $("#progress-text");
+
+    if (!zone) return;
+
+    zone.addEventListener("click", (e) => {
+      if (e.target === clearBtn || clearBtn.contains(e.target)) return;
+      input.click();
+    });
+
+    zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("dragover"); });
+    zone.addEventListener("dragleave", () => { zone.classList.remove("dragover"); });
+    zone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      zone.classList.remove("dragover");
+      const file = e.dataTransfer.files[0];
+      if (file) setFile(file);
+    });
+
+    input.addEventListener("change", () => {
+      if (input.files[0]) setFile(input.files[0]);
+    });
+
+    clearBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      clearFile();
+    });
+
+    function setFile(file) {
+      fileState.file = file;
+      fileState.uploadedUrl = null;
+      fileName.textContent = file.name;
+      fileSize.textContent = fmtBytes(file.size);
+      selected.hidden = false;
+      zone.querySelector(".drop-content").hidden = true;
+      zone.classList.add("has-file");
+    }
+
+    function clearFile() {
+      fileState.file = null;
+      fileState.uploadedUrl = null;
+      input.value = "";
+      selected.hidden = true;
+      zone.querySelector(".drop-content").hidden = false;
+      zone.classList.remove("has-file");
+      progress.hidden = true;
+    }
+
+    function setProgress(pct, text) {
+      progress.hidden = false;
+      progressFill.style.width = `${pct}%`;
+      progressText.textContent = text || `Uploading… ${Math.round(pct)}%`;
+    }
+
+    function hideProgress() {
+      progress.hidden = true;
+      progressFill.style.width = "0%";
+    }
+
+    // Expose for submit handler
+    window.__apk2sourceFileUpload = {
+      upload: async () => {
+        if (!fileState.file) throw new Error("no file selected");
+        if (fileState.uploadedUrl) return fileState.uploadedUrl;
+        if (!state.backendOk) throw new Error("backend offline — file upload requires backend");
+
+        const file = fileState.file;
+        const form = new FormData();
+        form.append("file", file);
+        form.append("game_name", $('input[name="game_name"]', $("#run-form")).value || "uploaded-game");
+
+        setProgress(0, "Uploading…");
+        fileState.uploading = true;
+
+        try {
+          const url = `${state.backend.replace(/\/$/, "")}/api/upload`;
+          const result = await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open("POST", url);
+            if (state.key) xhr.setRequestHeader("X-Panel-Key", state.key);
+
+            xhr.upload.addEventListener("progress", (e) => {
+              if (e.lengthComputable) {
+                setProgress((e.loaded / e.total) * 90, `Uploading… ${fmtBytes(e.loaded)} / ${fmtBytes(e.total)}`);
+              }
+            });
+
+            xhr.addEventListener("load", () => {
+              try {
+                const data = JSON.parse(xhr.responseText);
+                if (xhr.status >= 200 && xhr.status < 300 && data.ok) {
+                  resolve(data);
+                } else {
+                  reject(new Error(data.error || `HTTP ${xhr.status}`));
+                }
+              } catch {
+                reject(new Error(`Upload failed: HTTP ${xhr.status}`));
+              }
+            });
+
+            xhr.addEventListener("error", () => reject(new Error("Upload failed — network error")));
+            xhr.addEventListener("abort", () => reject(new Error("Upload aborted")));
+            xhr.send(form);
+          });
+
+          setProgress(100, "Upload complete!");
+          fileState.uploadedUrl = result.url;
+          setTimeout(() => { progress.hidden = true; }, 1500);
+          return result.url;
+        } finally {
+          fileState.uploading = false;
+        }
+      }
+    };
+  }
+
   // ---------------------------------------------------------------- dispatch
   function initRunForm() {
     const form = $("#run-form");
@@ -458,16 +605,38 @@
       }
       $$('input[type=checkbox]', form).forEach((c) => { inputs[c.name] = c.checked ? "true" : "false"; });
 
+      // If file mode, upload file first and get URL
+      if (fileState.mode === "file" && fileState.file && !fileState.uploadedUrl) {
+        btn.disabled = true;
+        setMsg(msg, "Uploading file…", "");
+        try {
+          const url = await window.__apk2sourceFileUpload.upload();
+          inputs.url = url;
+          setMsg(msg, "Upload complete. Dispatching pipeline…", "ok");
+        } catch (e) {
+          setMsg(msg, `Upload failed: ${e.message}`, "err");
+          btn.disabled = false;
+          return;
+        }
+      } else if (fileState.mode === "file" && fileState.uploadedUrl) {
+        inputs.url = fileState.uploadedUrl;
+      }
+
+      // Validate: need URL (from input or file upload)
+      if (!inputs.url) {
+        setMsg(msg, "Provide a URL or select a file.", "err");
+        btn.disabled = false;
+        return;
+      }
+
       btn.disabled = true;
       setMsg(msg, "Opening GitHub Actions…");
       try {
-        // Try backend first
         if (state.backendOk) {
           const r = await api("/api/trigger", { method: "POST", body: { workflow: "pipeline.yml", inputs } });
-          setMsg(msg, `Dispatched. ${r.run_url ? `Tracking \${r.run_url}` : "Check the History tab in ~10s."}`, "ok");
+          setMsg(msg, `Dispatched. ${r.run_url ? `Tracking ${r.run_url}` : "Check the History tab in ~10s."}`, "ok");
           setTimeout(loadRuns, 8000);
         } else {
-          // Open GitHub Actions UI directly
           const url = `https://github.com/${REPO}/actions/workflows/pipeline.yml`;
           const win = window.open(url, "_blank");
           if (!win) {
@@ -523,6 +692,8 @@
   async function boot() {
     initTabs();
     initSettings();
+    initInputMode();
+    initFileDrop();
     initRunForm();
     renderDag({});
     await loadConfig();

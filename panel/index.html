@@ -43,16 +43,43 @@
     </p>
 
     <form id="run-form" class="card form">
-      <label>
-        <span>Payload URL <b class="req">*</b></span>
-        <input name="url" type="url" required placeholder="https://…/game.apks" autocomplete="off" />
-        <small>.apk / .apks / .xapk / .apkm / .aab</small>
-      </label>
+      <div class="input-mode-toggle">
+        <button type="button" class="mode-btn active" data-mode="url">Link</button>
+        <button type="button" class="mode-btn" data-mode="file">File</button>
+      </div>
 
-      <label>
-        <span>Mirror URL (optional)</span>
-        <input name="url_fallback" type="url" placeholder="https://…" autocomplete="off" />
-      </label>
+      <div id="mode-url" class="input-mode">
+        <label>
+          <span>Payload URL <b class="req">*</b></span>
+          <input name="url" type="url" placeholder="https://…/game.apks" autocomplete="off" />
+          <small>.apk / .apks / .xapk / .apkm / .aab</small>
+        </label>
+
+        <label>
+          <span>Mirror URL (optional)</span>
+          <input name="url_fallback" type="url" placeholder="https://…" autocomplete="off" />
+        </label>
+      </div>
+
+      <div id="mode-file" class="input-mode" hidden>
+        <label class="file-drop-zone" id="drop-zone">
+          <input type="file" id="apk-file" name="apk_file" accept=".apk,.apks,.xapk,.apkm,.aab,.zip" hidden />
+          <div class="drop-content">
+            <span class="drop-icon">📦</span>
+            <span class="drop-text">Drop APK here or <b>click to browse</b></span>
+            <small>.apk / .apks / .xapk / .apkm / .aab (max ~100 MB)</small>
+          </div>
+          <div class="drop-selected" id="drop-selected" hidden>
+            <span class="drop-file-name" id="drop-file-name"></span>
+            <span class="drop-file-size" id="drop-file-size"></span>
+            <button type="button" class="btn btn-ghost btn-sm" id="drop-clear">✕</button>
+          </div>
+        </label>
+        <div class="upload-progress" id="upload-progress" hidden>
+          <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+          <span class="progress-text" id="progress-text">Uploading…</span>
+        </div>
+      </div>
 
       <label>
         <span>Game name <b class="req">*</b></span>
