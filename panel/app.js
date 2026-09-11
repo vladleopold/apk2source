@@ -530,6 +530,18 @@
         void gameInput.offsetWidth; // trigger reflow
         gameInput.classList.add("auto-filled");
       }
+
+      // Hide URL field when file is selected
+      const urlMode = $("#mode-url");
+      const urlInput = $('input[name="url"]', $("#run-form"));
+      if (urlMode) urlMode.hidden = true;
+      if (urlInput) { urlInput.removeAttribute("required"); urlInput.value = ""; }
+
+      // Switch toggle to File
+      $$(".mode-btn").forEach((b) => b.classList.remove("active"));
+      const fileBtn = $('.mode-btn[data-mode="file"]');
+      if (fileBtn) fileBtn.classList.add("active");
+      fileState.mode = "file";
     }
 
     function clearFile() {
@@ -540,6 +552,18 @@
       zone.querySelector(".drop-content").hidden = false;
       zone.classList.remove("has-file");
       progress.hidden = true;
+
+      // Restore URL field
+      const urlMode = $("#mode-url");
+      const urlInput = $('input[name="url"]', $("#run-form"));
+      if (urlMode) urlMode.hidden = false;
+      if (urlInput) urlInput.setAttribute("required", "");
+
+      // Switch toggle back to Link
+      $$(".mode-btn").forEach((b) => b.classList.remove("active"));
+      const linkBtn = $('.mode-btn[data-mode="url"]');
+      if (linkBtn) linkBtn.classList.add("active");
+      fileState.mode = "url";
     }
 
     function setProgress(pct, text) {
