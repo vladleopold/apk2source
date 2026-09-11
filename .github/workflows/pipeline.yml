@@ -352,7 +352,7 @@ jobs:
   device-cache:
     name: Device cache capture (API ${{ matrix.api }})
     if: github.event.inputs.run_device_cache == 'true' || github.event.client_payload.run_device_cache == true
-    needs: [plan, heavy]
+    needs: [plan]
     runs-on: ubuntu-latest
     timeout-minutes: 180
     continue-on-error: true
@@ -360,7 +360,7 @@ jobs:
       fail-fast: false
       matrix:
         api: [29]
-        arch: [x86_64]
+        arch: [arm64-v8a]
     env:
       WORK: ${{ github.workspace }}/work
       PAYLOAD_DIR: ${{ github.workspace }}/payload
@@ -397,13 +397,6 @@ jobs:
           test -n "$APK" || { echo "::error::no APK found"; exit 1; }
           apk2source unpack --input "$APK" --out "$WORK/unpacked" --work "$WORK"
 
-      - name: Enable KVM for Android emulator
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          test -e /dev/kvm
-
       - name: AVD cache
         uses: actions/cache@v4
         id: avd-cache
@@ -420,6 +413,8 @@ jobs:
           api-level: ${{ matrix.api }}
           arch: ${{ matrix.arch }}
           force-avd-creation: false
+          emulator-boot-timeout: 900
+          disable-linux-hw-accel: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: false
           script: echo "AVD ready"
@@ -430,12 +425,14 @@ jobs:
           api-level: ${{ matrix.api }}
           arch: ${{ matrix.arch }}
           force-avd-creation: false
+          emulator-boot-timeout: 900
+          disable-linux-hw-accel: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
           script: |
             adb wait-for-device
             adb shell settings put global window_animation_scale 0
-            python -m apk2source.cli device-cache --splits "$WORK/unpacked/splits" --out "$WORK/device-cache" --work "$WORK" --package "${{ needs.heavy.outputs.package }}" --settle 900
+            python -m apk2source.cli device-cache --splits "$WORK/unpacked/splits" --out "$WORK/device-cache" --work "$WORK" --package "${{ steps.unpack.outputs.package }}" --settle 900
 
       - name: Upload captured cache
         if: always()

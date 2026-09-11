@@ -111,7 +111,6 @@ def install(splits_dir: Path, package: Optional[str], serial: str,
     base = next((p for p in apks if p.name.lower().startswith("base")), apks[0])
     others = [p for p in apks if p != base]
 
-    # ABI filtering: only push splits matching the device, else install fails
     abi = device_info(serial).get("abi") or ""
     keep: List[Path] = [base]
     for p in others:
@@ -140,10 +139,10 @@ def install(splits_dir: Path, package: Optional[str], serial: str,
 
 
 def resolve_package(serial: str, hint: Optional[str] = None) -> Optional[str]:
-    if hint:
-        return hint
     out = adb_out("shell", "pm", "list", "packages", "-3", serial=serial)
     pkgs = [ln.replace("package:", "").strip() for ln in out.splitlines() if ln.startswith("package:")]
+    if hint and hint in pkgs:
+        return hint
     return pkgs[-1] if pkgs else None
 
 
@@ -323,6 +322,7 @@ def capture(splits_dir: Path, out_dir: Path, *, package: Optional[str] = None,
     rec["device"] = device_info(serial)
     write_json(meta_dir / "device.json", rec["device"])
 
+    snap_pre = snapshot(serial, package, "pre_install")
     if not skip_install:
         rec["install"] = install(Path(splits_dir), package, serial)
         if not rec["install"]["ok"]:
@@ -336,11 +336,6 @@ def capture(splits_dir: Path, out_dir: Path, *, package: Optional[str] = None,
         write_json(meta_dir / "device_cache.json", rec)
         return rec
     rec["package"] = pkg
-
-    snap_pre = snapshot(serial, pkg, "pre_install")
-    if not skip_install:
-        # reinstall is not needed; snapshot right after install instead
-        pass
     snap_post_install = snapshot(serial, pkg, "post_install")
 
     rec["launch"] = launch(serial, pkg)

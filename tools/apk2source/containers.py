@@ -20,6 +20,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -135,6 +136,49 @@ def parse_axml_strings(data: bytes) -> List[str]:
     return strings
 
 
+def _manifest_package_from_strings(strings: List[str]) -> Optional[str]:
+    pkg = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z0-9_]+){1,}$")
+    cands = [s for s in strings if pkg.match(s) and len(s) < 200]
+    ranked = sorted(cands, key=lambda s: (not s.count(".") >= 2, len(s)))
+    return ranked[0] if ranked else None
+
+
+def _root_manifest_package(data: bytes, strings: List[str]) -> Optional[str]:
+    pos = 8
+    while pos + 8 <= len(data):
+        ctype, _hsize, size = struct.unpack_from("<HHI", data, pos)
+        if size == 0 or pos + size > len(data):
+            break
+        if ctype == _AXML_START_TAG and size >= 36:
+            name_idx = struct.unpack_from("<I", data, pos + 20)[0]
+            attr_start = struct.unpack_from("<H", data, pos + 24)[0]
+            attr_size = struct.unpack_from("<H", data, pos + 26)[0]
+            attr_count = struct.unpack_from("<H", data, pos + 28)[0]
+            if name_idx < len(strings) and strings[name_idx] == "manifest" and attr_size >= 20:
+                attrs_start = pos + 16 + attr_start
+                attrs_end = attrs_start + attr_count * attr_size
+                if attrs_end <= pos + size:
+                    for off in range(attrs_start, attrs_end, attr_size):
+                        ns_idx = struct.unpack_from("<I", data, off)[0]
+                        name_idx = struct.unpack_from("<I", data, off + 4)[0]
+                        raw_value = struct.unpack_from("<I", data, off + 8)[0]
+                        value_size, _res0, value_type, value_data = struct.unpack_from("<HBBI", data, off + 12)
+                        if ns_idx == 0xFFFFFFFF and name_idx < len(strings) and strings[name_idx] == "package":
+                            candidates = [raw_value]
+                            if value_size >= 8 and value_type == 0x03:
+                                candidates.append(value_data)
+                            for idx in candidates:
+                                if idx < len(strings) and strings[idx]:
+                                    return strings[idx]
+        pos += size
+    return None
+
+
+def _manifest_package_from_data(data: bytes) -> Optional[str]:
+    strings = parse_axml_strings(data)
+    return _root_manifest_package(data, strings) or _manifest_package_from_strings(strings)
+
+
 def parse_manifest(path: Path) -> Dict[str, Any]:
     """Best-effort package/version extraction from an APK's binary manifest."""
     out: Dict[str, Any] = {}
@@ -147,14 +191,9 @@ def parse_manifest(path: Path) -> Dict[str, Any]:
 
     strings = parse_axml_strings(data)
     out["string_pool_size"] = len(strings)
-
-    pkg = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z0-9_]+){1,}$")
-    cands = [s for s in strings if pkg.match(s) and len(s) < 200]
-    # the package attribute is normally the first plausible reverse-dns string
-    ranked = sorted(cands, key=lambda s: (not s.count(".") >= 2, len(s)))
-    if ranked:
-        out["package_candidates"] = ranked[:8]
-        out["package"] = ranked[0]
+    pkg = _manifest_package_from_data(data)
+    if pkg:
+        out["package"] = pkg
     for key in ("versionName", "versionCode", "minSdkVersion", "targetSdkVersion"):
         if key in strings:
             out.setdefault("attr_names_seen", []).append(key)
@@ -320,10 +359,7 @@ def _pkg_from_manifest_file(mf: Path) -> Optional[str]:
         data = mf.read_bytes()
     except Exception:  # noqa: BLE001
         return None
-    strings = parse_axml_strings(data)
-    pkg = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z0-9_]+){1,}$")
-    cands = [s for s in strings if pkg.match(s) and len(s) < 200]
-    return sorted(cands, key=lambda s: (not s.count(".") >= 2, len(s)))[0] if cands else None
+    return _manifest_package_from_data(data)
 
 
 def _summarise_tree(root: Path, top_n: int = 40) -> Dict[str, Any]:
