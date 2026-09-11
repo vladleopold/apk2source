@@ -706,28 +706,39 @@
       }
       $$('input[type=checkbox]', form).forEach((c) => { inputs[c.name] = c.checked ? "true" : "false"; });
 
-      // If file mode, upload file first and get URL
-      if (fileState.mode === "file" && fileState.file && !fileState.uploadedUrl) {
-        btn.disabled = true;
-        setMsg(msg, "Uploading file…", "");
-        try {
-          const url = await window.__apk2sourceFileUpload.upload();
-          inputs.url = url;
-          setMsg(msg, "Upload complete. Dispatching pipeline…", "ok");
-        } catch (e) {
-          setMsg(msg, `Upload failed: ${e.message}`, "err");
-          btn.disabled = false;
-          return;
-        }
-      } else if (fileState.mode === "file" && fileState.uploadedUrl) {
-        inputs.url = fileState.uploadedUrl;
+      // Validate game_name is always required
+      if (!inputs.game_name) {
+        setMsg(msg, "Game name is required.", "err");
+        return;
       }
 
-      // Validate: need URL (from input or file upload)
-      if (!inputs.url) {
-        setMsg(msg, "Provide a URL or select a file.", "err");
-        btn.disabled = false;
-        return;
+      // If file mode, upload file first and get URL
+      if (fileState.mode === "file") {
+        if (!fileState.file) {
+          setMsg(msg, "Select a file first.", "err");
+          return;
+        }
+        if (!fileState.uploadedUrl) {
+          btn.disabled = true;
+          setMsg(msg, "Uploading file…", "");
+          try {
+            const url = await window.__apk2sourceFileUpload.upload();
+            inputs.url = url;
+            setMsg(msg, "Upload complete. Dispatching pipeline…", "ok");
+          } catch (e) {
+            setMsg(msg, `Upload failed: ${e.message}`, "err");
+            btn.disabled = false;
+            return;
+          }
+        } else {
+          inputs.url = fileState.uploadedUrl;
+        }
+      } else {
+        // URL mode — URL is required
+        if (!inputs.url) {
+          setMsg(msg, "Payload URL is required.", "err");
+          return;
+        }
       }
 
       btn.disabled = true;
