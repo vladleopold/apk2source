@@ -721,16 +721,48 @@ export default {
         const head = await R2.head(key)
         if (!head) return fail("file not found", 404)
 
-        const obj = await R2.get(key)
-        if (!obj) return fail("file not found", 404)
+        // HTTP Range support: lets clients probe headers / resume downloads
+        // without pulling the whole object (multi-GB payloads).
+        const size = head.size
+        let obj = null, status = 200, length = size
+        const extra = {}
+        const m = /^bytes=(\d*)-(\d*)\s*$/.exec(request.headers.get("range") || "")
+        if (m) {
+          let start, end
+          if (m[1] === "") {
+            const suffix = parseInt(m[2] || "0", 10)
+            if (!suffix) return fail("invalid range", 416)
+            start = Math.max(0, size - suffix)
+            end = size - 1
+          } else {
+            start = parseInt(m[1], 10)
+            end = m[2] === "" ? size - 1 : parseInt(m[2], 10)
+          }
+          if (Number.isNaN(start) || Number.isNaN(end) || start >= size || end < start) {
+            return new Response("Requested Range Not Satisfiable", { status: 416,
+              headers: { "Content-Range": `bytes */${size}` } })
+          }
+          end = Math.min(end, size - 1)
+          obj = await R2.get(key, { range: { offset: start, length: end - start + 1 } })
+          if (!obj) return fail("file not found", 404)
+          status = 206
+          length = end - start + 1
+          extra["Content-Range"] = `bytes ${start}-${end}/${size}`
+          extra["Accept-Ranges"] = "bytes"
+        } else {
+          obj = await R2.get(key)
+          if (!obj) return fail("file not found", 404)
+          extra["Accept-Ranges"] = "bytes"
+        }
 
         const filename = key.split("/").pop() || "download"
         return new Response(obj.body, {
-          status: 200,
+          status,
           headers: {
             "Content-Type": head.httpMetadata?.contentType || "application/octet-stream",
-            "Content-Length": String(head.size),
+            "Content-Length": String(length),
             "Content-Disposition": `attachment; filename="${filename}"`,
+            ...extra,
             "Cache-Control": "private, max-age=3600",
           }
         })
