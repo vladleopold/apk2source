@@ -28,11 +28,8 @@
     timer: null,
   };
 
-  // Clear stale backend from localStorage if it doesn't match current default
-  const storedBackend = localStorage.getItem(LS_BACKEND);
-  if (storedBackend && !DEFAULT_BACKENDS.includes(storedBackend)) {
-    localStorage.removeItem(LS_BACKEND);
-  }
+  // Clear stale backend from localStorage — always use DEFAULT_BACKENDS
+  localStorage.removeItem(LS_BACKEND);
 
   // ---------------------------------------------------------------- helpers
   const fmtDur = (ms) => {
