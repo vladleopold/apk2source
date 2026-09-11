@@ -325,7 +325,133 @@ export default {
           headers: Object.fromEntries(r.headers.entries()),
         }, {})
       }
-    // ---------------------------------------------------------------- file upload
+    // ---------------------------------------------------------------- ONE-SHOT RUN: upload file + dispatch pipeline
+    // Browser sends file → Worker saves to R2 → Worker dispatches pipeline → done.
+    // After this returns, browser can be closed. Everything runs in the cloud.
+    if (path === "run") {
+      if (request.method !== "POST") return fail("POST only", 405)
+      if (!GITHUB_TOKEN) return fail("no GITHUB_TOKEN configured", 503)
+      if (PANEL_KEY && !authorized(request, PANEL_KEY)) return fail("invalid X-Panel-Key", 401)
+
+      const contentType = request.headers.get("content-type") || ""
+      if (!contentType.includes("multipart/form-data")) {
+        return fail("content-type must be multipart/form-data", 415)
+      }
+
+      try {
+        const formData = await request.formData()
+        const file = formData.get("file")
+        const gameName = (formData.get("game_name") || "uploaded-game").slice(0, 120)
+        const urlFallback = (formData.get("url_fallback") || "").slice(0, 2000)
+        const sha256 = (formData.get("sha256") || "").slice(0, 128)
+        const useCache = formData.get("use_cache") !== "false"
+        const runDeviceCache = formData.get("run_device_cache") === "true"
+        const runJavaDecompile = formData.get("run_java_decompile") !== "false"
+        const runIl2cpp = formData.get("run_il2cpp") !== "false"
+        const runAssetripper = formData.get("run_assetripper") !== "false"
+        const publishSpine = formData.get("publish_spine") !== "false"
+        const publishGameSource = formData.get("publish_game_source") === "true"
+        const runner = (formData.get("runner") || "ubuntu-latest").slice(0, 60)
+        const spineRepo = (formData.get("spine_repo") || "leaopold/source_spine").slice(0, 120)
+        const sourceRepo = (formData.get("source_repo") || "leaopold/game_source").slice(0, 120)
+        const maxTextureSide = (formData.get("max_texture_side") || "0").slice(0, 10)
+
+        // --- Step 1: Save file to R2 ---
+        let downloadUrl = null
+
+        if (file && typeof file !== "string" && file.size > 0) {
+          // File upload → save to R2 via multipart upload
+          if (!R2) return fail("R2 storage not configured for file uploads", 503)
+
+          const name = file.name || "upload.apk"
+          const ext = name.split(".").pop().toLowerCase()
+          const ALLOWED = new Set(["apk", "apks", "xapk", "apkm", "aab", "zip"])
+          if (!ALLOWED.has(ext)) {
+            return fail(`.${ext} not allowed — expected apk/apks/xapk/apkm/aab/zip`, 400)
+          }
+
+          const slug = gameName.replace(/[^A-Za-z0-9._-]/g, "-").replace(/-{2,}/g, "-").slice(0, 60)
+          const ts = Date.now()
+          const key = `uploads/${slug}/${ts}/${name.replace(/[^A-Za-z0-9._-]/g, "_")}`
+
+          // For files up to 100MB: upload directly to R2 via multipart
+          const MAX_SINGLE = 100 * 1024 * 1024
+          if (file.size <= MAX_SINGLE) {
+            await R2.put(key, file, {
+              httpMetadata: { contentType: file.type || "application/octet-stream" },
+            })
+          } else {
+            // Larger files: use R2 multipart upload
+            const CHUNK = 80 * 1024 * 1024
+            const totalChunks = Math.ceil(file.size / CHUNK)
+            const multipartUpload = await R2.createMultipartUpload(key, {
+              httpMetadata: { contentType: file.type || "application/octet-stream" },
+            })
+            const parts = []
+            for (let i = 0; i < totalChunks; i++) {
+              const start = i * CHUNK
+              const end = Math.min(start + CHUNK, file.size)
+              const chunkBlob = file.slice(start, end)
+              const part = await multipartUpload.uploadPart(i + 1, chunkBlob)
+              parts.push({ partNumber: i + 1, etag: part.etag })
+            }
+            await multipartUpload.complete(parts)
+          }
+
+          // Download URL goes through the Worker's download proxy
+          downloadUrl = `${url.replace(/^https?:\/\/[^/]+/, "")}/api/download?key=${encodeURIComponent(key)}`
+        }
+
+        // --- Step 2: Dispatch pipeline ---
+        if (!downloadUrl) return fail("no file uploaded and no URL provided", 400)
+
+        const slug = gameName.replace(/[^A-Za-z0-9._-]/g, "-").replace(/-{2,}/g, "-").slice(0, 60)
+        const workflow = "pipeline.yml"
+        const inputs = {
+          url: downloadUrl,
+          game_name: gameName,
+          sha256: sha256 || "",
+          use_cache: String(useCache),
+          run_device_cache: String(runDeviceCache),
+          run_java_decompile: String(runJavaDecompile),
+          run_il2cpp: String(runIl2cpp),
+          run_assetripper: String(runAssetripper),
+          publish_spine: String(publishSpine),
+          publish_game_source: String(publishGameSource),
+          spine_repo: spineRepo,
+          source_repo: sourceRepo,
+          runner: runner,
+          max_texture_side: maxTextureSide,
+        }
+        if (urlFallback) inputs.url_fallback = urlFallback
+
+        await gh(`/repos/${REPO}/actions/workflows/${workflow}/dispatches`, {
+          method: "POST",
+          body: { ref: "main", inputs },
+        }, GITHUB_TOKEN)
+
+        // Find the run we just created
+        let runUrl = null, runId = null
+        try {
+          await new Promise(r => setTimeout(r, 2500))
+          const data = await gh(`/repos/${REPO}/actions/runs?per_page=5&event=workflow_dispatch`, {}, GITHUB_TOKEN)
+          const hit = (data.workflow_runs || [])[0]
+          if (hit) { runUrl = hit.html_url; runId = String(hit.id) }
+        } catch {}
+
+        return corsResponse({
+          ok: true,
+          game_name: gameName,
+          run_id: runId,
+          run_url: runUrl,
+          message: "File uploaded and pipeline dispatched. You can close this page.",
+        }, {})
+      } catch (e) {
+        return fail(`run error: ${e.message}`, 500)
+      }
+    }
+
+    // ---------------------------------------------------------------- file upload (legacy, small files to GitHub Release)
     if (path === "upload") {
       if (request.method !== "POST") return fail("POST only", 405)
       if (!GITHUB_TOKEN) return fail("no GITHUB_TOKEN configured", 503)

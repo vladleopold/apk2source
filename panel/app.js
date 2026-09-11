@@ -780,6 +780,86 @@
     form.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       const fd = new FormData(form);
+
+      // Validate
+      const gameName = fd.get("game_name") || "";
+      if (!gameName.trim()) {
+        setMsg(msg, "Game name is required.", "err");
+        return;
+      }
+
+      const hasFile = fileState.file && fileState.file.size > 0;
+      const hasUrl = !!fd.get("url");
+      if (!hasFile && !hasUrl) {
+        setMsg(msg, "Provide a Payload URL or select a file.", "err");
+        return;
+      }
+
+      btn.disabled = true;
+
+      // --- FILE MODE: send everything to Worker /api/run ---
+      // Worker saves to R2 + dispatches pipeline. Browser can close after.
+      if (hasFile) {
+        setMsg(msg, "Uploading & dispatching… (you can close this page after)", "");
+        try {
+          const runFd = new FormData();
+          runFd.append("file", fileState.file);
+          runFd.append("game_name", gameName);
+          if (fd.get("url_fallback")) runFd.append("url_fallback", fd.get("url_fallback"));
+          if (fd.get("sha256")) runFd.append("sha256", fd.get("sha256"));
+          runFd.append("use_cache", fd.get("use_cache") || "true");
+          runFd.append("run_device_cache", fd.get("run_device_cache") || "false");
+          runFd.append("run_java_decompile", fd.get("run_java_decompile") || "true");
+          runFd.append("run_il2cpp", fd.get("run_il2cpp") || "true");
+          runFd.append("run_assetripper", fd.get("run_assetripper") || "true");
+          runFd.append("publish_spine", fd.get("publish_spine") || "true");
+          runFd.append("publish_game_source", fd.get("publish_game_source") || "false");
+          runFd.append("runner", fd.get("runner") || "ubuntu-latest");
+          runFd.append("spine_repo", fd.get("spine_repo") || "leaopold/source_spine");
+          runFd.append("source_repo", fd.get("source_repo") || "leaopold/game_source");
+          runFd.append("max_texture_side", fd.get("max_texture_side") || "0");
+
+          const result = await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open("POST", `${state.backend.replace(/\/$/, "")}/api/run`);
+            if (state.key) xhr.setRequestHeader("X-Panel-Key", state.key);
+
+            xhr.upload.addEventListener("progress", (e) => {
+              if (e.lengthComputable) {
+                const pct = Math.round((e.loaded / e.total) * 100);
+                setMsg(msg, `Uploading ${fmtBytes(e.loaded)} / ${fmtBytes(e.total)} (${pct}%)…`, "");
+              }
+            });
+
+            xhr.addEventListener("load", () => {
+              try {
+                const data = JSON.parse(xhr.responseText);
+                if (xhr.status >= 200 && xhr.status < 300 && data.ok) resolve(data);
+                else reject(new Error(data.error || `HTTP ${xhr.status}`));
+              } catch { reject(new Error(`Request failed: HTTP ${xhr.status}`)); }
+            });
+            xhr.addEventListener("error", () => reject(new Error("Network error")));
+            xhr.addEventListener("abort", () => reject(new Error("Aborted")));
+            xhr.send(runFd);
+          });
+
+          // Clear upload state
+          localStorage.removeItem("apk2source.upload");
+          fileState.file = null;
+          fileState.uploadedUrl = null;
+
+          const runLink = result.run_url ? `<a href="${esc(result.run_url)}" target="_blank">Open pipeline →</a>` : "";
+          setMsg(msg, `✓ Done! Pipeline dispatched. You can close this page. ${runLink}`, "ok");
+          setTimeout(loadRuns, 8000);
+        } catch (e) {
+          setMsg(msg, `Error: ${e.message}`, "err");
+        } finally {
+          btn.disabled = false;
+        }
+        return;
+      }
+
+      // --- URL MODE: dispatch pipeline directly ---
       const inputs = {};
       for (const [k, v] of fd.entries()) {
         if (v === "") continue;
@@ -787,50 +867,16 @@
       }
       $$('input[type=checkbox]', form).forEach((c) => { inputs[c.name] = c.checked ? "true" : "false"; });
 
-      // Validate game_name is always required
-      if (!inputs.game_name) {
-        setMsg(msg, "Game name is required.", "err");
-        return;
-      }
-
-      // If a file is selected (regardless of mode toggle), upload it
-      if (fileState.file) {
-        if (!fileState.uploadedUrl) {
-          btn.disabled = true;
-          setMsg(msg, "Uploading file…", "");
-          try {
-            const url = await window.__apk2sourceFileUpload.upload();
-            inputs.url = url;
-            setMsg(msg, "Upload complete. Dispatching pipeline…", "ok");
-          } catch (e) {
-            setMsg(msg, `Upload failed: ${e.message}`, "err");
-            btn.disabled = false;
-            return;
-          }
-        } else {
-          inputs.url = fileState.uploadedUrl;
-        }
-      } else if (!inputs.url) {
-        // No file, no URL
-        setMsg(msg, "Provide a Payload URL or select a file to upload.", "err");
-        return;
-      }
-
-      btn.disabled = true;
-      setMsg(msg, "Opening GitHub Actions…");
+      setMsg(msg, "Dispatching pipeline…");
       try {
         if (state.backendOk) {
           const r = await api("/api/trigger", { method: "POST", body: { workflow: "pipeline.yml", inputs } });
-          setMsg(msg, `Dispatched. ${r.run_url ? `Tracking ${r.run_url}` : "Check the History tab in ~10s."}`, "ok");
+          setMsg(msg, `Dispatched. ${r.run_url ? `<a href="${esc(r.run_url)}" target="_blank">Open pipeline →</a>` : "Check History tab."}`, "ok");
           setTimeout(loadRuns, 8000);
         } else {
           const url = `https://github.com/${REPO}/actions/workflows/pipeline.yml`;
-          const win = window.open(url, "_blank");
-          if (!win) {
-            setMsg(msg, "Pop-up blocked! Allow pop-ups for this site.", "err");
-          } else {
-            setMsg(msg, `Opened in new tab. Click "Run workflow" below the title, fill the form, and press "Run workflow".`, "ok");
-          }
+          window.open(url, "_blank");
+          setMsg(msg, "Opened GitHub Actions. Fill the form and press Run.", "ok");
         }
       } catch (e) {
         setMsg(msg, `Error: ${e.message}`, "err");
