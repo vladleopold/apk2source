@@ -560,7 +560,17 @@
   const fileState = { mode: "url", file: null, uploadedUrl: null, uploading: false };
 
   function initInputMode() {
+    // Split view: Link (left) and File (right) are both visible, no toggle.
+    // Typing a URL clears a selected file so exactly one source is active.
+    const urlInput = $('input[name="url"]', $("#run-form"));
+    if (urlInput && !urlInput.dataset.bound) {
+      urlInput.dataset.bound = "1";
+      urlInput.addEventListener("input", () => {
+        if (urlInput.value.trim() && window.__apk2sourceClearFile) window.__apk2sourceClearFile();
+      });
+    }
     const btns = $$(".mode-btn");
+    if (!btns.length) return;
     btns.forEach((b) => b.addEventListener("click", () => {
       btns.forEach((x) => x.classList.remove("active"));
       b.classList.add("active");
@@ -625,6 +635,7 @@
       e.stopPropagation();
       clearFile();
     });
+    window.__apk2sourceClearFile = clearFile;
 
     function setFile(file) {
       fileState.file = file;

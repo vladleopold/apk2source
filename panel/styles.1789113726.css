@@ -191,6 +191,25 @@ td.mono { font-family: var(--mono); font-size: 12px; }
 .mode-btn.active { background: var(--accent); color: #fff; }
 .input-mode { grid-column: 1 / -1; display: grid; gap: 14px; }
 
+/* ---------- input split: link left, file right ---------- */
+.input-split {
+  grid-column: 1 / -1;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+}
+.input-half {
+  background: #0d1220; border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0;
+}
+.input-half label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--fg-dim); }
+.input-half label > span { font-weight: 600; color: var(--fg); }
+.half-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--fg-dim); border-bottom: 1px dashed var(--line); padding-bottom: 4px;
+}
+@media (max-width: 720px) {
+  .input-split { grid-template-columns: 1fr; }
+}
+
 /* ---------- file drop zone ---------- */
 .file-drop-zone {
   border: 2px dashed var(--line); border-radius: var(--radius); padding: 32px 20px;

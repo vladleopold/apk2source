@@ -45,37 +45,36 @@
     </p>
 
     <form id="run-form" class="card form" novalidate>
-      <div class="input-mode-toggle">
-        <button type="button" class="mode-btn active" data-mode="url">Link</button>
-        <button type="button" class="mode-btn" data-mode="file">File</button>
-      </div>
+      <div class="input-split">
+        <div class="input-half" id="half-url">
+          <div class="half-title">Link</div>
+          <label>
+            <span>Payload URL</span>
+            <input name="url" type="url" placeholder="https://…/game.apks" autocomplete="off" />
+            <small>.apk / .apks / .xapk / .apkm / .aab — or select a file →</small>
+          </label>
+          <input type="hidden" name="url_fallback" value="" />
+        </div>
 
-      <div id="mode-url" class="input-mode">
-        <label>
-          <span>Payload URL</span>
-          <input name="url" type="url" placeholder="https://…/game.apks" autocomplete="off" />
-          <small>Required in Link mode. Not needed if you select a file.</small>
-        </label>
-        <input type="hidden" name="url_fallback" value="" />
-      </div>
-
-      <div id="mode-file" class="input-mode" hidden>
-        <label class="file-drop-zone" id="drop-zone">
-          <input type="file" id="apk-file" name="apk_file" class="file-input-visually-hidden" accept=".apk,.apks,.xapk,.apkm,.aab,.zip" />
-          <div class="drop-content">
-            <span class="drop-icon">📦</span>
-            <span class="drop-text">Drop APK here or <b>click to browse</b></span>
-            <small>.apk / .apks / .xapk / .apkm / .aab / .zip — up to 5 GB</small>
+        <div class="input-half" id="half-file">
+          <div class="half-title">File</div>
+          <label class="file-drop-zone" id="drop-zone">
+            <input type="file" id="apk-file" name="apk_file" class="file-input-visually-hidden" accept=".apk,.apks,.xapk,.apkm,.aab,.zip" />
+            <div class="drop-content">
+              <span class="drop-icon">📦</span>
+              <span class="drop-text">Drop APK here or <b>click to browse</b></span>
+              <small>.apk / .apks / .xapk / .apkm / .aab / .zip — up to 5 GB</small>
+            </div>
+            <div class="drop-selected" id="drop-selected" hidden>
+              <span class="drop-file-name" id="drop-file-name"></span>
+              <span class="drop-file-size" id="drop-file-size"></span>
+              <button type="button" class="btn btn-ghost btn-sm" id="drop-clear">✕</button>
+            </div>
+          </label>
+          <div class="upload-progress" id="upload-progress" hidden>
+            <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+            <span class="progress-text" id="progress-text">Uploading…</span>
           </div>
-          <div class="drop-selected" id="drop-selected" hidden>
-            <span class="drop-file-name" id="drop-file-name"></span>
-            <span class="drop-file-size" id="drop-file-size"></span>
-            <button type="button" class="btn btn-ghost btn-sm" id="drop-clear">✕</button>
-          </div>
-        </label>
-        <div class="upload-progress" id="upload-progress" hidden>
-          <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
-          <span class="progress-text" id="progress-text">Uploading…</span>
         </div>
       </div>
 
