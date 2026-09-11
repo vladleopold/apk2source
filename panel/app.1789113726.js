@@ -235,17 +235,27 @@
   function renderDag(jobStates = {}) {
     const dag = $("#live-dag") || $("#dag");
     if (!dag) return;
+    const stOf = (id) => jobStates[id] || "idle";
+    // Visible only: running + failed + exactly one "next" box in pipeline order.
+    // Finished (ok/skip) and idle boxes are hidden.
+    let nextShown = false;
+    const isVisible = (n) => {
+      const st = stOf(n.id);
+      if (st === "run" || st === "fail") return true;
+      if ((st === "wait" || st === "idle") && !nextShown) { nextShown = true; return true; }
+      return false;
+    };
     const levels = [...new Set(STAGES.map((s) => s.level))].sort();
     dag.innerHTML = levels.map((lv) => {
-      const nodes = STAGES.filter((s) => s.level === lv);
+      const nodes = STAGES.filter((s) => s.level === lv && isVisible(s));
+      if (!nodes.length) return "";
       return `<div class="dag-level">
         <div class="lvl-title">level ${lv}${lv === 2 ? " · parallel" : ""}</div>
         ${nodes.map((n) => {
-          const st = jobStates[n.id];
-          const stCls = st ? `st-${st}` : "st-wait";
-          const stTxt = st || "idle";
-          return `<div class="node ${n.cls}" data-stage="${n.id}">
-            <span class="st ${stCls}">${esc(stTxt)}</span>
+          const st = stOf(n.id);
+          const nodeCls = st === "run" ? "is-run" : st === "fail" ? "is-fail" : "";
+          return `<div class="node ${n.cls} ${nodeCls}" data-stage="${n.id}">
+            <span class="st st-${st}">${esc(st)}</span>
             <b>${esc(n.name)}</b><small>${esc(n.desc)}</small>
           </div>`;
         }).join("")}
@@ -271,15 +281,62 @@
     return match ? match.id : null;
   }
 
+  // Stage patterns: the heavy job covers 5 stages, so map by STEP names first.
+  const STAGE_PATTERNS = [
+    ["plan", /plan/],
+    ["acquire", /acquire/],
+    ["unpack", /unpack/],
+    ["detect", /detect/],
+    ["unity", /unity asset|asset extraction/],
+    ["spine", /spine extraction/],
+    ["device-cache", /capture cache|device cache/],
+    ["java-decompile", /jadx|apktool|java \/ resources/],
+    ["il2cpp-decompile", /il2cpp/],
+    ["unity-project", /assetripper|unity project/],
+    ["spine-publish", /publish.*spine|source_spine/],
+    ["source-publish", /game.?source/],
+    ["report", /report/],
+  ];
+
+  function stepState(step) {
+    if (!step) return "wait";
+    if (step.status === "completed") {
+      if (step.conclusion === "success") return "ok";
+      if (step.conclusion === "skipped") return "skip";
+      return "fail";
+    }
+    return step.status === "in_progress" ? "run" : "wait";
+  }
+
+  function matchStagePattern(name) {
+    const key = (name || "").toLowerCase();
+    const hit = STAGE_PATTERNS.find(([, re]) => re.test(key));
+    return hit ? hit[0] : null;
+  }
+
+  const STATE_RANK = { run: 5, fail: 4, wait: 3, ok: 2, skip: 1, idle: 0 };
+  function mergeState(prev, next) {
+    if (!prev) return next;
+    return (STATE_RANK[next] || 0) > (STATE_RANK[prev] || 0) ? next : prev;
+  }
+
   function jobStatesFromRun(run) {
     const out = {};
     if (!run || !run.jobs) return out;
     for (const j of run.jobs) {
-      const id = matchStage(j.name);
+      // Precise: map every step (covers the 5 stages inside the heavy job).
+      for (const s of j.steps || []) {
+        const id = matchStagePattern(s.name);
+        if (!id) continue;
+        out[id] = mergeState(out[id], stepState(s));
+      }
+      // Fallback: whole-job mapping when no step matched.
+      const id = matchStage(j.name) || matchStagePattern(j.name);
       if (!id) continue;
-      out[id] = j.status === "completed"
+      const st = j.status === "completed"
         ? (j.conclusion === "success" ? "ok" : j.conclusion === "skipped" ? "skip" : "fail")
         : (j.status === "in_progress" ? "run" : "wait");
+      out[id] = mergeState(out[id], st);
     }
     return out;
   }
