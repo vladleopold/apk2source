@@ -192,8 +192,10 @@
     state.config = await loadStatic(`${base}/config.json`, {});
     $("#repo-pill").textContent = `repo: ${state.config.repository || "—"}`;
     $("#built-at").textContent = state.config.built_at ? `built ${fmtDate(state.config.built_at)}` : "";
-    $("#cfg-spine-repo").textContent = state.config.spine_repo || "source_spine";
-    $("#cfg-source-repo").textContent = state.config.source_repo || "game_source";
+    const cfgSpine = $("#cfg-spine-repo");
+    if (cfgSpine) cfgSpine.textContent = state.config.spine_repo || "source_spine";
+    const cfgSource = $("#cfg-source-repo");
+    if (cfgSource) cfgSource.textContent = state.config.source_repo || "game_source";
     return state.config;
   }
 
