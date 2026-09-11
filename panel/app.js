@@ -453,14 +453,26 @@
       fileState.mode = b.dataset.mode;
       const urlMode = $("#mode-url");
       const fileMode = $("#mode-file");
+      const urlInput = $('input[name="url"]', $("#run-form"));
+      const gameInput = $('input[name="game_name"]', $("#run-form"));
+      const gameHint = gameInput?.nextElementSibling;
+
       if (fileState.mode === "url") {
         urlMode.hidden = false;
         fileMode.hidden = true;
-        $('input[name="url"]', $("#run-form")).setAttribute("required", "");
+        urlInput.setAttribute("required", "");
+        if (gameHint) gameHint.textContent = "Used as the folder name in the destination repos.";
+        urlInput.focus();
       } else {
         urlMode.hidden = true;
         fileMode.hidden = false;
-        $('input[name="url"]', $("#run-form")).removeAttribute("required");
+        urlInput.removeAttribute("required");
+        urlInput.value = ""; // clear URL — not needed in file mode
+        if (gameHint) gameHint.textContent = "Auto-filled from filename (editable).";
+        // Don't clear game_name if already filled
+        if (!gameInput.value) {
+          gameInput.focus();
+        }
       }
     }));
   }
@@ -509,6 +521,17 @@
       selected.hidden = false;
       zone.querySelector(".drop-content").hidden = true;
       zone.classList.add("has-file");
+
+      // Auto-fill game name from filename (strip extension)
+      const gameInput = $('input[name="game_name"]', $("#run-form"));
+      if (gameInput) {
+        const baseName = file.name.replace(/\.[^/.]+$/, ""); // remove extension
+        const slug = baseName.replace(/[^A-Za-z0-9._-]/g, "-").replace(/-{2,}/g, "-").slice(0, 80);
+        gameInput.value = slug;
+        gameInput.classList.remove("auto-filled");
+        void gameInput.offsetWidth; // trigger reflow
+        gameInput.classList.add("auto-filled");
+      }
     }
 
     function clearFile() {

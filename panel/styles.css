@@ -98,6 +98,8 @@ input[type=text], input[type=url], input[type=number], input[type=password], sel
   padding: 9px 11px; border-radius: 8px; font-size: 14px; font-family: inherit; width: 100%;
 }
 input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px #4ea1ff22; }
+input.auto-filled { border-color: var(--ok); background: #0f2a1e15; }
+input.auto-filled:focus { border-color: var(--accent); }
 
 .switches { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 0; }
 .switches legend { font-size: 12px; color: var(--fg-dim); padding: 0 6px; text-transform: uppercase; letter-spacing: .06em; }
