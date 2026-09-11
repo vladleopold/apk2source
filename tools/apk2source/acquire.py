@@ -29,6 +29,28 @@ from .util import ensure_dir, human, log, read_json, sha256_file, slug, warn, wr
 
 UA = "apk2source/1.0 (+https://github.com/leaopold/apk2source)"
 META_SUFFIX = ".meta.json"
+CONTAINER_EXTS = (".apk", ".apks", ".xapk", ".apkm", ".aab", ".zip")
+
+
+def _name_from_url(url: str) -> str:
+    """Best-effort payload filename for a download URL.
+
+    Plain links carry the filename in the path, but proxy URLs such as the
+    Worker R2 endpoint (/api/download?key=uploads/<game>/<ts>/name.apks)
+    end in a bare segment like "download". For those, recover the real name
+    from the ?key= query param so downstream jobs can find the payload by
+    its container extension.
+    """
+    parsed = urllib.parse.urlparse(url)
+    base = Path(parsed.path).name or ""
+    if base.lower().endswith(CONTAINER_EXTS):
+        return base
+    qs = urllib.parse.parse_qs(parsed.query)
+    for v in qs.get("key", []):
+        cand = Path(v).name
+        if cand.lower().endswith(CONTAINER_EXTS):
+            return cand
+    return base or "payload.bin"
 
 
 def _meta_path(path: Path) -> Path:
@@ -180,7 +202,7 @@ def acquire(
                 return _record(dest, u, started, cached=True, sha256=sha256)
 
     for u in urls:
-        name = filename or Path(urllib.parse.urlparse(u).path).name or "payload.bin"
+        name = filename or _name_from_url(u)
         dest = out_dir / name
         try:
             log(f"downloading {u}")
