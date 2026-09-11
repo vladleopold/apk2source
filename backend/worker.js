@@ -399,7 +399,7 @@ export default {
           }
 
           // Download URL goes through the Worker's download proxy
-          downloadUrl = `${url.replace(/^https?:\/\/[^/]+/, "")}/api/download?key=${encodeURIComponent(key)}`
+          downloadUrl = `${new URL(request.url).origin}/api/download?key=${encodeURIComponent(key)}`
         }
 
         // --- Step 2: Dispatch pipeline ---
