@@ -641,10 +641,90 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # --------------------------------------------------------------------------
+  device-spine:
+    name: Spine from device cache
+    if: github.event.inputs.run_device_cache == 'true' || github.event.client_payload.run_device_cache == true
+    needs: [plan, heavy, device-cache]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    continue-on-error: true
+    env:
+      WORK: ${{ github.workspace }}/work
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: tools/pyproject.toml }
+      - run: python -m pip install --quiet -e ./tools
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: device-cache-api*
+          merge-multiple: true
+          path: device-cache
+        continue-on-error: true
+
+      - name: Extract Unity + Spine from captured runtime files
+        run: |
+          set -euo pipefail
+          if [ ! -d device-cache ] || [ -z "$(find device-cache -type f | head -1)" ]; then
+            echo "::warning::no device-cache artifact - nothing to extract"
+            exit 0
+          fi
+          find device-cache -type f | head -30
+          du -sh device-cache || true
+          apk2source extract-unity --root device-cache \
+            --out "$WORK/dassets" --work "$WORK" \
+            --max-texture-side "${{ needs.plan.outputs.max_texture_side }}" || true
+          apk2source extract-spine --assets "$WORK/dassets" --out "$WORK/spine-device" \
+            --game "${{ needs.plan.outputs.game_slug }}" \
+            --package "${{ needs.heavy.outputs.package }}" --work "$WORK" || true
+          # Also scan the raw captured tree for loose json/atlas/png payloads.
+          apk2source extract-spine --assets device-cache --out "$WORK/spine-device-raw" \
+            --game "${{ needs.plan.outputs.game_slug }}" \
+            --package "${{ needs.heavy.outputs.package }}" --work "$WORK" || true
+          mkdir -p "$WORK/spine-device"
+          cp -rn "$WORK/spine-device-raw/." "$WORK/spine-device/" 2>/dev/null || true
+          echo "--- device spine tree ---"
+          find "$WORK/spine-device" -type f | head -40 || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spine-device-output
+          path: ${{ env.WORK }}/spine-device/**
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Publish device spine
+        if: github.event.inputs.publish_spine != 'false'
+        env:
+          APK2SOURCE_GITHUB_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          SRC="$WORK/spine-device/${{ needs.plan.outputs.game_slug }}"
+          [ -d "$SRC" ] || SRC="$WORK/spine-device"
+          if [ -z "$(find "$SRC" -type f | head -1)" ]; then
+            echo "::warning::nothing to publish from device cache"
+            exit 0
+          fi
+          if [ -z "${APK2SOURCE_GITHUB_TOKEN:-}" ]; then
+            echo "::warning::PUBLISH_TOKEN secret is not set - running a dry-run publish"
+            DRY="--dry-run"
+          else
+            DRY=""
+          fi
+          apk2source publish --src "$SRC" \
+            --repo "${{ needs.plan.outputs.spine_repo }}" \
+            --subdir "${{ needs.plan.outputs.game_slug }}/device" \
+            --branch main \
+            --message "apk2source(${{ needs.plan.outputs.game_slug }}): spine from device first-run cache" \
+            --workdir "$RUNNER_TEMP/publish-device" $DRY
+
+  # --------------------------------------------------------------------------
   report:
     name: Report + Pages data
     if: always()
-    needs: [plan, heavy, device-cache, java-decompile, il2cpp-decompile, unity-project, spine-publish]
+    needs: [plan, heavy, device-cache, java-decompile, il2cpp-decompile, unity-project, spine-publish, device-spine]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

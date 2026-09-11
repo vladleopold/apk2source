@@ -196,7 +196,14 @@ def acquire(
         for u in urls:
             hit = lookup_cache(Path(cache_dir), u, sha256)
             if hit:
-                dest = out_dir / (filename or hit.name)
+                name = filename or hit.name
+                if not name.lower().endswith(CONTAINER_EXTS):
+                    # Old cache entries may carry an extensionless name
+                    # (e.g. "download" from a proxy URL) — recover it.
+                    fixed = _name_from_url(u)
+                    if fixed.lower().endswith(CONTAINER_EXTS):
+                        name = fixed
+                dest = out_dir / name
                 if dest.resolve() != hit.resolve():
                     shutil.copy2(hit, dest)
                 return _record(dest, u, started, cached=True, sha256=sha256)
