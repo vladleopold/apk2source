@@ -2,6 +2,7 @@
 // Minimal serverless backend for the GitHub Pages control panel
 
 const GH_API = "https://api.github.com"
+const MAX_R2_DIRECT = 100 * 1024 * 1024 // 100MB — above this, use pre-signed R2 upload
 
 export default {
   async fetch(request, env) {
@@ -9,6 +10,7 @@ export default {
       const GITHUB_TOKEN = env.GH_TOKEN || ""
       const PANEL_KEY = env.PANEL_ACCESS_KEY || ""
       const REPO = env.APK2SOURCE_REPO || "vladleopold/apk2source"
+      const R2 = env.apk2source_uploads || null
       const url = new URL(request.url)
       const path = url.pathname.replace(/^\/api\//, "")
 
@@ -411,6 +413,182 @@ export default {
         }, {})
       } catch (e) {
         return fail(`upload error: ${e.message}`, 500)
+      }
+    }
+
+    // ---------------------------------------------------------------- R2 pre-signed upload (large files up to 5GB)
+    if (path === "upload-url") {
+      if (request.method !== "POST") return fail("POST only", 405)
+      if (!R2) return fail("R2 storage not configured", 503)
+      if (PANEL_KEY && !authorized(request, PANEL_KEY)) return fail("invalid X-Panel-Key", 401)
+
+      try {
+        const body = await request.json()
+        const filename = (body.filename || "upload.apk").replace(/[^A-Za-z0-9._-]/g, "_")
+        const gameName = (body.game_name || "uploaded-game").slice(0, 120)
+        const contentType = body.content_type || "application/octet-stream"
+        const fileSize = parseInt(body.file_size || "0", 10)
+
+        if (!filename) return fail("filename required", 400)
+        if (fileSize > 5 * 1024 * 1024 * 1024) return fail("max file size is 5 GB", 413)
+
+        const slug = gameName.replace(/[^A-Za-z0-9._-]/g, "-").replace(/-{2,}/g, "-").slice(0, 60)
+        const ts = Date.now()
+        const key = `uploads/${slug}/${ts}/${filename}`
+
+        // Initiate R2 multipart upload
+        const multipartUpload = await R2.createMultipartUpload(key, {
+          httpMetadata: { contentType },
+        })
+
+        return corsResponse({
+          ok: true,
+          upload_id: multipartUpload.uploadId,
+          key,
+          max_chunk: 100 * 1024 * 1024, // 100MB per chunk
+          max_size: 5 * 1024 * 1024 * 1024,
+        }, {})
+      } catch (e) {
+        return fail(`upload-url error: ${e.message}`, 500)
+      }
+    }
+
+    // ---------------------------------------------------------------- R2 upload chunk (multipart)
+    if (path === "upload-chunk") {
+      if (request.method !== "POST") return fail("POST only", 405)
+      if (!R2) return fail("R2 storage not configured", 503)
+      if (PANEL_KEY && !authorized(request, PANEL_KEY)) return fail("invalid X-Panel-Key", 401)
+
+      try {
+        const contentType = request.headers.get("content-type") || ""
+        if (!contentType.includes("multipart/form-data")) {
+          return fail("content-type must be multipart/form-data", 415)
+        }
+
+        const formData = await request.formData()
+        const key = formData.get("key")
+        const uploadId = formData.get("upload_id")
+        const partNumber = parseInt(formData.get("part_number") || "1", 10)
+        const chunk = formData.get("chunk")
+
+        if (!key || !uploadId) return fail("key and upload_id required", 400)
+        if (!chunk || typeof chunk === "string") return fail("no chunk data", 400)
+
+        const multipartUpload = R2.resumeMultipartUpload(key, uploadId)
+        const part = await multipartUpload.uploadPart(partNumber, chunk)
+
+        return corsResponse({
+          ok: true,
+          part_number: partNumber,
+          etag: part.etag,
+          size: chunk.size,
+        }, {})
+      } catch (e) {
+        return fail(`upload-chunk error: ${e.message}`, 500)
+      }
+    }
+
+    // ---------------------------------------------------------------- R2 finish multipart upload
+    if (path === "upload-finish") {
+      if (request.method !== "POST") return fail("POST only", 405)
+      if (!R2) return fail("R2 storage not configured", 503)
+      if (PANEL_KEY && !authorized(request, PANEL_KEY)) return fail("invalid X-Panel-Key", 401)
+
+      try {
+        const body = await request.json()
+        const key = body.key
+        const uploadId = body.upload_id
+        const rawParts = body.parts // [{part_number, etag}]
+
+        if (!key || !uploadId) return fail("key and upload_id required", 400)
+        if (!rawParts || !rawParts.length) return fail("parts list required", 400)
+
+        // Map to the format R2 expects: {partNumber, etag}
+        const parts = rawParts.map(p => ({
+          partNumber: typeof p.part_number === "number" ? p.part_number : parseInt(p.part_number || p.partNumber || "0", 10),
+          etag: p.etag,
+        }))
+
+        const multipartUpload = R2.resumeMultipartUpload(key, uploadId)
+        await multipartUpload.complete(parts)
+
+        // Get object metadata for size
+        const head = await R2.head(key)
+
+        return corsResponse({
+          ok: true,
+          key,
+          size: head?.size || 0,
+          content_type: head?.httpMetadata?.contentType || "application/octet-stream",
+        }, {})
+      } catch (e) {
+        return fail(`upload-finish error: ${e.message}`, 500)
+      }
+    }
+
+    // ---------------------------------------------------------------- R2 abort multipart upload
+    if (path === "upload-abort") {
+      if (request.method !== "POST") return fail("POST only", 405)
+      if (!R2) return fail("R2 storage not configured", 503)
+      if (PANEL_KEY && !authorized(request, PANEL_KEY)) return fail("invalid X-Panel-Key", 401)
+
+      try {
+        const body = await request.json()
+        const key = body.key
+        const uploadId = body.upload_id
+        if (!key || !uploadId) return fail("key and upload_id required", 400)
+
+        const multipartUpload = R2.resumeMultipartUpload(key, uploadId)
+        await multipartUpload.abort()
+
+        return corsResponse({ ok: true, aborted: key }, {})
+      } catch (e) {
+        return fail(`upload-abort error: ${e.message}`, 500)
+      }
+    }
+
+    // ---------------------------------------------------------------- R2 delete uploaded file
+    if (path === "upload-delete") {
+      if (request.method !== "POST") return fail("POST only", 405)
+      if (!R2) return fail("R2 storage not configured", 503)
+      if (PANEL_KEY && !authorized(request, PANEL_KEY)) return fail("invalid X-Panel-Key", 401)
+
+      try {
+        const body = await request.json()
+        const key = body.key
+        if (!key) return fail("key required", 400)
+        await R2.delete(key)
+        return corsResponse({ ok: true, deleted: key }, {})
+      } catch (e) {
+        return fail(`upload-delete error: ${e.message}`, 500)
+      }
+    }
+
+    // ---------------------------------------------------------------- R2 download proxy (streams file from R2)
+    if (path === "download") {
+      if (!R2) return fail("R2 storage not configured", 503)
+      const key = url.searchParams.get("key")
+      if (!key) return fail("key required", 400)
+
+      try {
+        const head = await R2.head(key)
+        if (!head) return fail("file not found", 404)
+
+        const obj = await R2.get(key)
+        if (!obj) return fail("file not found", 404)
+
+        const filename = key.split("/").pop() || "download"
+        return new Response(obj.body, {
+          status: 200,
+          headers: {
+            "Content-Type": head.httpMetadata?.contentType || "application/octet-stream",
+            "Content-Length": String(head.size),
+            "Content-Disposition": `attachment; filename="${filename}"`,
+            "Cache-Control": "private, max-age=3600",
+          }
+        })
+      } catch (e) {
+        return fail(`download error: ${e.message}`, 500)
       }
     }
 

@@ -540,48 +540,126 @@
         if (!state.backendOk) throw new Error("backend offline — file upload requires backend");
 
         const file = fileState.file;
-        const form = new FormData();
-        form.append("file", file);
-        form.append("game_name", $('input[name="game_name"]', $("#run-form")).value || "uploaded-game");
+        const gameName = $('input[name="game_name"]', $("#run-form")).value || "uploaded-game";
+        const SMALL_FILE_LIMIT = 100 * 1024 * 1024; // 100MB
+        const CHUNK_SIZE = 80 * 1024 * 1024; // 80MB chunks (safe under Worker limit)
 
-        setProgress(0, "Uploading…");
+        setProgress(0, "Preparing upload…");
         fileState.uploading = true;
 
         try {
-          const url = `${state.backend.replace(/\/$/, "")}/api/upload`;
-          const result = await new Promise((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
-            xhr.open("POST", url);
-            if (state.key) xhr.setRequestHeader("X-Panel-Key", state.key);
+          let downloadUrl;
 
-            xhr.upload.addEventListener("progress", (e) => {
-              if (e.lengthComputable) {
-                setProgress((e.loaded / e.total) * 90, `Uploading… ${fmtBytes(e.loaded)} / ${fmtBytes(e.total)}`);
-              }
-            });
+          if (file.size <= SMALL_FILE_LIMIT) {
+            // Small file: upload via Worker to GitHub Release
+            setProgress(5, "Uploading to GitHub…");
+            const form = new FormData();
+            form.append("file", file);
+            form.append("game_name", gameName);
 
-            xhr.addEventListener("load", () => {
-              try {
-                const data = JSON.parse(xhr.responseText);
-                if (xhr.status >= 200 && xhr.status < 300 && data.ok) {
-                  resolve(data);
-                } else {
-                  reject(new Error(data.error || `HTTP ${xhr.status}`));
+            const result = await new Promise((resolve, reject) => {
+              const xhr = new XMLHttpRequest();
+              xhr.open("POST", `${state.backend.replace(/\/$/, "")}/api/upload`);
+              if (state.key) xhr.setRequestHeader("X-Panel-Key", state.key);
+
+              xhr.upload.addEventListener("progress", (e) => {
+                if (e.lengthComputable) {
+                  setProgress(5 + (e.loaded / e.total) * 85, `Uploading… ${fmtBytes(e.loaded)} / ${fmtBytes(e.total)}`);
                 }
-              } catch {
-                reject(new Error(`Upload failed: HTTP ${xhr.status}`));
+              });
+
+              xhr.addEventListener("load", () => {
+                try {
+                  const data = JSON.parse(xhr.responseText);
+                  if (xhr.status >= 200 && xhr.status < 300 && data.ok) resolve(data);
+                  else reject(new Error(data.error || `HTTP ${xhr.status}`));
+                } catch { reject(new Error(`Upload failed: HTTP ${xhr.status}`)); }
+              });
+              xhr.addEventListener("error", () => reject(new Error("Upload failed — network error")));
+              xhr.addEventListener("abort", () => reject(new Error("Upload aborted")));
+              xhr.send(form);
+            });
+            downloadUrl = result.url;
+
+          } else {
+            // Large file: chunked R2 multipart upload
+            const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+            setProgress(2, `Splitting into ${totalChunks} chunks…`);
+
+            // Step 1: Initiate multipart upload
+            const initResp = await api("/api/upload-url", {
+              method: "POST",
+              body: {
+                filename: file.name,
+                game_name: gameName,
+                content_type: file.type || "application/octet-stream",
+                file_size: file.size,
               }
             });
+            if (!initResp.ok) throw new Error(initResp.error || "failed to initiate upload");
 
-            xhr.addEventListener("error", () => reject(new Error("Upload failed — network error")));
-            xhr.addEventListener("abort", () => reject(new Error("Upload aborted")));
-            xhr.send(form);
-          });
+            const { upload_id: uploadId, key } = initResp;
+            const parts = [];
+
+            // Step 2: Upload chunks
+            for (let i = 0; i < totalChunks; i++) {
+              const start = i * CHUNK_SIZE;
+              const end = Math.min(start + CHUNK_SIZE, file.size);
+              const chunk = file.slice(start, end);
+              const partNumber = i + 1;
+
+              setProgress(5 + (i / totalChunks) * 85, `Uploading chunk ${partNumber}/${totalChunks}… ${fmtBytes(start)}-${fmtBytes(end)} / ${fmtBytes(file.size)}`);
+
+              const formData = new FormData();
+              formData.append("key", key);
+              formData.append("upload_id", uploadId);
+              formData.append("part_number", String(partNumber));
+              formData.append("chunk", chunk, file.name);
+
+              const partResult = await new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open("POST", `${state.backend.replace(/\/$/, "")}/api/upload-chunk`);
+                if (state.key) xhr.setRequestHeader("X-Panel-Key", state.key);
+
+                xhr.upload.addEventListener("progress", (e) => {
+                  if (e.lengthComputable) {
+                    const chunkPct = (e.loaded / e.total) * (85 / totalChunks);
+                    const basePct = 5 + (i / totalChunks) * 85;
+                    setProgress(basePct + chunkPct, `Chunk ${partNumber}/${totalChunks}: ${fmtBytes(e.loaded)} / ${fmtBytes(e.total)}`);
+                  }
+                });
+
+                xhr.addEventListener("load", () => {
+                  try {
+                    const data = JSON.parse(xhr.responseText);
+                    if (xhr.status >= 200 && xhr.status < 300 && data.ok) resolve(data);
+                    else reject(new Error(data.error || `HTTP ${xhr.status}`));
+                  } catch { reject(new Error(`Chunk upload failed: HTTP ${xhr.status}`)); }
+                });
+                xhr.addEventListener("error", () => reject(new Error("Chunk upload failed — network error")));
+                xhr.addEventListener("abort", () => reject(new Error("Upload aborted")));
+                xhr.send(formData);
+              });
+
+              parts.push({ part_number: partResult.part_number, etag: partResult.etag });
+            }
+
+            // Step 3: Complete multipart upload
+            setProgress(92, "Finalizing upload…");
+            const finishResp = await api("/api/upload-finish", {
+              method: "POST",
+              body: { key, upload_id: uploadId, parts }
+            });
+            if (!finishResp.ok) throw new Error(finishResp.error || "failed to finalize upload");
+
+            // Download URL goes through the Worker's download proxy
+            downloadUrl = `${state.backend.replace(/\/$/, "")}/api/download?key=${encodeURIComponent(key)}`;
+          }
 
           setProgress(100, "Upload complete!");
-          fileState.uploadedUrl = result.url;
+          fileState.uploadedUrl = downloadUrl;
           setTimeout(() => { progress.hidden = true; }, 1500);
-          return result.url;
+          return downloadUrl;
         } finally {
           fileState.uploading = false;
         }
