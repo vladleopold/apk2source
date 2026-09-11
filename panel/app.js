@@ -542,6 +542,21 @@
       const fileBtn = $('.mode-btn[data-mode="file"]');
       if (fileBtn) fileBtn.classList.add("active");
       fileState.mode = "file";
+
+      // Check if this file matches a pending upload — update progress display
+      const LS_UPLOAD = "apk2source.upload";
+      try {
+        const raw = localStorage.getItem(LS_UPLOAD);
+        if (raw) {
+          const saved = JSON.parse(raw);
+          if (saved && saved.filename === file.name && saved.file_size === file.size) {
+            const totalChunks = Math.ceil(file.size / (80 * 1024 * 1024));
+            const completed = saved.completed_parts ? saved.completed_parts.length : 0;
+            const pct = totalChunks > 0 ? (completed / totalChunks) * 85 : 0;
+            setProgress(pct, `Ready to resume: ${completed}/${totalChunks} chunks done`);
+          }
+        }
+      } catch {}
     }
 
     function clearFile() {
@@ -587,16 +602,35 @@
         const file = fileState.file;
         const gameName = $('input[name="game_name"]', $("#run-form")).value || "uploaded-game";
         const SMALL_FILE_LIMIT = 100 * 1024 * 1024; // 100MB
-        const CHUNK_SIZE = 80 * 1024 * 1024; // 80MB chunks (safe under Worker limit)
+        const CHUNK_SIZE = 80 * 1024 * 1024; // 80MB chunks
+        const LS_UPLOAD = "apk2source.upload";
 
         setProgress(0, "Preparing upload…");
         fileState.uploading = true;
+
+        // Check for resumable upload in localStorage
+        let saved = null;
+        try {
+          const raw = localStorage.getItem(LS_UPLOAD);
+          if (raw) saved = JSON.parse(raw);
+        } catch {}
+
+        const canResume = saved
+          && saved.filename === file.name
+          && saved.file_size === file.size
+          && saved.game_name === gameName
+          && saved.upload_id
+          && saved.key
+          && saved.completed_parts
+          && saved.completed_parts.length > 0
+          && saved.backend === state.backend;
 
         try {
           let downloadUrl;
 
           if (file.size <= SMALL_FILE_LIMIT) {
             // Small file: upload via Worker to GitHub Release
+            localStorage.removeItem(LS_UPLOAD);
             setProgress(5, "Uploading to GitHub…");
             const form = new FormData();
             form.append("file", file);
@@ -627,27 +661,36 @@
             downloadUrl = result.url;
 
           } else {
-            // Large file: chunked R2 multipart upload
+            // Large file: chunked R2 multipart upload (resumable)
             const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-            setProgress(2, `Splitting into ${totalChunks} chunks…`);
+            let uploadId, key, parts;
 
-            // Step 1: Initiate multipart upload
-            const initResp = await api("/api/upload-url", {
-              method: "POST",
-              body: {
-                filename: file.name,
-                game_name: gameName,
-                content_type: file.type || "application/octet-stream",
-                file_size: file.size,
-              }
-            });
-            if (!initResp.ok) throw new Error(initResp.error || "failed to initiate upload");
+            if (canResume) {
+              uploadId = saved.upload_id;
+              key = saved.key;
+              parts = saved.completed_parts;
+              const resumePct = (parts.length / totalChunks) * 85;
+              setProgress(resumePct, `Resuming from chunk ${parts.length}/${totalChunks}…`);
+            } else {
+              setProgress(2, `Splitting into ${totalChunks} chunks…`);
+              const initResp = await api("/api/upload-url", {
+                method: "POST",
+                body: {
+                  filename: file.name,
+                  game_name: gameName,
+                  content_type: file.type || "application/octet-stream",
+                  file_size: file.size,
+                }
+              });
+              if (!initResp.ok) throw new Error(initResp.error || "failed to initiate upload");
+              uploadId = initResp.upload_id;
+              key = initResp.key;
+              parts = [];
+            }
 
-            const { upload_id: uploadId, key } = initResp;
-            const parts = [];
-
-            // Step 2: Upload chunks
-            for (let i = 0; i < totalChunks; i++) {
+            // Upload remaining chunks
+            const startIdx = parts.length;
+            for (let i = startIdx; i < totalChunks; i++) {
               const start = i * CHUNK_SIZE;
               const end = Math.min(start + CHUNK_SIZE, file.size);
               const chunk = file.slice(start, end);
@@ -687,21 +730,37 @@
               });
 
               parts.push({ part_number: partResult.part_number, etag: partResult.etag });
+
+              // Save progress to localStorage after each chunk
+              try {
+                localStorage.setItem(LS_UPLOAD, JSON.stringify({
+                  filename: file.name,
+                  file_size: file.size,
+                  game_name: gameName,
+                  upload_id: uploadId,
+                  key: key,
+                  completed_parts: parts,
+                  backend: state.backend,
+                  saved_at: Date.now(),
+                }));
+              } catch {}
             }
 
-            // Step 3: Complete multipart upload
+            // Complete multipart upload
             setProgress(92, "Finalizing upload…");
+            localStorage.removeItem(LS_UPLOAD);
+
             const finishResp = await api("/api/upload-finish", {
               method: "POST",
               body: { key, upload_id: uploadId, parts }
             });
             if (!finishResp.ok) throw new Error(finishResp.error || "failed to finalize upload");
 
-            // Download URL goes through the Worker's download proxy
             downloadUrl = `${state.backend.replace(/\/$/, "")}/api/download?key=${encodeURIComponent(key)}`;
           }
 
           setProgress(100, "Upload complete!");
+          localStorage.removeItem(LS_UPLOAD);
           fileState.uploadedUrl = downloadUrl;
           setTimeout(() => { progress.hidden = true; }, 1500);
           return downloadUrl;
@@ -816,6 +875,56 @@
     tick();
   }
 
+  // ---------------------------------------------------------------- restore pending upload
+  function restorePendingUpload() {
+    const LS_UPLOAD = "apk2source.upload";
+    try {
+      const raw = localStorage.getItem(LS_UPLOAD);
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (!saved || !saved.filename || !saved.upload_id || !saved.key) return;
+
+      // Show pending upload info
+      const dropZone = $("#drop-zone");
+      const selected = $("#drop-selected");
+      const fileName = $("#drop-file-name");
+      const fileSize = $("#drop-file-size");
+      const progress = $("#upload-progress");
+      const progressFill = $("#progress-fill");
+      const progressText = $("#progress-text");
+      const gameInput = $('input[name="game_name"]', $("#run-form"));
+      const urlMode = $("#mode-url");
+      const urlInput = $('input[name="url"]', $("#run-form"));
+
+      if (dropZone && selected && fileName) {
+        fileName.textContent = saved.filename;
+        if (fileSize) fileSize.textContent = fmtBytes(saved.file_size || 0);
+        selected.hidden = false;
+        dropZone.querySelector(".drop-content").hidden = true;
+        dropZone.classList.add("has-file");
+
+        // Show progress
+        const totalChunks = Math.ceil((saved.file_size || 0) / (80 * 1024 * 1024));
+        const completed = saved.completed_parts ? saved.completed_parts.length : 0;
+        const pct = totalChunks > 0 ? (completed / totalChunks) * 100 : 0;
+        if (progress) progress.hidden = false;
+        if (progressFill) progressFill.style.width = `${pct}%`;
+        if (progressText) progressText.textContent = `Pending: ${completed}/${totalChunks} chunks uploaded — select the same file to resume`;
+
+        // Auto-fill game name
+        if (gameInput && saved.game_name) gameInput.value = saved.game_name;
+
+        // Switch to file mode
+        if (urlMode) urlMode.hidden = true;
+        if (urlInput) { urlInput.removeAttribute("required"); urlInput.value = ""; }
+        $$(".mode-btn").forEach((b) => b.classList.remove("active"));
+        const fileBtn = $('.mode-btn[data-mode="file"]');
+        if (fileBtn) fileBtn.classList.add("active");
+        fileState.mode = "file";
+      }
+    } catch {}
+  }
+
   // ---------------------------------------------------------------- boot
   async function boot() {
     initTabs();
@@ -823,6 +932,7 @@
     initInputMode();
     initFileDrop();
     initRunForm();
+    restorePendingUpload();
     renderDag({});
     await loadConfig();
     await detectBackend();
