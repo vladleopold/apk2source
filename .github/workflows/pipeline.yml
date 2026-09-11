@@ -359,8 +359,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-         api: [29]
-          arch: [arm64-v8a]
+        api: [29]
+        arch: [arm64-v8a]
     env:
       WORK: ${{ github.workspace }}/work
       PAYLOAD_DIR: ${{ github.workspace }}/payload
