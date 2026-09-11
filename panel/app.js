@@ -28,7 +28,7 @@
     timer: null,
   };
 
-  // Clear stale backend from localStorage — always use DEFAULT_BACKENDS
+  // Clear stale backend from localStorage
   localStorage.removeItem(LS_BACKEND);
 
   // ---------------------------------------------------------------- helpers
@@ -156,12 +156,12 @@
 
   async function detectBackend() {
     const pill = $("#backend-pill");
-    const candidates = [state.backend, state.config.backend, ...DEFAULT_BACKENDS].filter(Boolean);
-    for (const url of new Set(candidates)) {
+    // Try DEFAULT_BACKENDS only — never trust stale candidates
+    for (const url of DEFAULT_BACKENDS) {
       try {
-        state.backend = url;
-        const h = await api("/api/health");
-        if (h && h.ok) {
+        const r = await fetch(`${url}/api/health`, { method: "GET", headers: { Accept: "application/json" } });
+        if (r.ok) {
+          state.backend = url;
           state.backendOk = true;
           localStorage.setItem(LS_BACKEND, url);
           pill.textContent = `backend: ${url.replace(/^https?:\/\//, "").split("/")[0]}`;
@@ -170,15 +170,10 @@
         }
       } catch { /* try next */ }
     }
-    // Clear stale backend from localStorage so we don't retry the dead URL
     localStorage.removeItem(LS_BACKEND);
     state.backendOk = false;
-    state.backend = "";
-    if (oldBackend) {
-      pill.textContent = `backend: ${oldBackend} unavailable — using static data`;
-    } else {
-      pill.textContent = "backend: offline (static data only)";
-    }
+    state.backend = DEFAULT_BACKENDS[0] || "";
+    pill.textContent = "backend: offline (static data only)";
     pill.className = "pill pill-err";
     return false;
   }
