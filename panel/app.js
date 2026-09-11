@@ -710,12 +710,8 @@
         return;
       }
 
-      // If file mode, upload file first and get URL
-      if (fileState.mode === "file") {
-        if (!fileState.file) {
-          setMsg(msg, "Select a file first.", "err");
-          return;
-        }
+      // If a file is selected (regardless of mode toggle), upload it
+      if (fileState.file) {
         if (!fileState.uploadedUrl) {
           btn.disabled = true;
           setMsg(msg, "Uploading file…", "");
@@ -731,12 +727,10 @@
         } else {
           inputs.url = fileState.uploadedUrl;
         }
-      } else {
-        // URL mode — URL is required
-        if (!inputs.url) {
-          setMsg(msg, "Payload URL is required.", "err");
-          return;
-        }
+      } else if (!inputs.url) {
+        // No file, no URL
+        setMsg(msg, "Provide a Payload URL or select a file to upload.", "err");
+        return;
       }
 
       btn.disabled = true;
