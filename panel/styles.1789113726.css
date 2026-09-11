@@ -229,6 +229,31 @@ td.mono { font-family: var(--mono); font-size: 12px; }
 }
 .progress-text { font-size: 12px; color: var(--fg-dim); font-family: var(--mono); white-space: nowrap; }
 
+/* ---------- live run tracker (fits on screen, no page scroll) ---------- */
+#tab-run .form { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+#tab-run .card { padding: 14px; margin-bottom: 12px; }
+#tab-run h2 { font-size: 17px; }
+#tab-run .hint { font-size: 12.5px; margin-bottom: 10px; }
+.live-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+#live-title { font-size: 15px; font-weight: 700; }
+.mono.dim { color: var(--fg-dim); font-size: 11.5px; }
+.live-head-right { display: flex; align-items: center; gap: 8px; }
+.dag-live { max-height: 46vh; overflow-x: auto; overflow-y: hidden; padding-bottom: 8px; }
+.dag-live .dag-level { min-width: 168px; }
+.dag-live .node { padding: 7px 9px; }
+.dag-live .node b { font-size: 12.5px; }
+.dag-live .node small { font-size: 10.5px; }
+.st-run { color: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.log-ticker {
+  display: flex; align-items: center; gap: 8px; margin-top: 8px;
+  background: #0d1220; border: 1px solid var(--line); border-radius: 8px;
+  padding: 7px 10px; font-family: var(--mono); font-size: 12px; color: var(--fg-dim);
+  white-space: nowrap; overflow: hidden;
+}
+#live-log-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; animation: pulse 1.2s ease-in-out infinite; }
+
 /* ---------- modal ---------- */
 .modal { position: fixed; inset: 0; background: #000a; display: grid; place-items: center; z-index: 50; padding: 20px; }
 .modal[hidden] { display: none; }

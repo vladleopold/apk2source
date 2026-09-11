@@ -29,7 +29,6 @@
 
 <nav class="tabs" role="tablist">
   <button class="tab active" data-tab="run" role="tab" aria-selected="true">Run</button>
-  <button class="tab" data-tab="pipeline" role="tab" aria-selected="false">Pipeline</button>
   <button class="tab" data-tab="history" role="tab" aria-selected="false">History</button>
   <button class="tab" data-tab="automation" role="tab" aria-selected="false">Automation</button>
   <button class="tab" data-tab="spine" role="tab" aria-selected="false">Spine library</button>
@@ -57,11 +56,7 @@
           <input name="url" type="url" placeholder="https://…/game.apks" autocomplete="off" />
           <small>Required in Link mode. Not needed if you select a file.</small>
         </label>
-
-        <label>
-          <span>Mirror URL (optional)</span>
-          <input name="url_fallback" type="url" placeholder="https://…" autocomplete="off" />
-        </label>
+        <input type="hidden" name="url_fallback" value="" />
       </div>
 
       <div id="mode-file" class="input-mode" hidden>
@@ -84,41 +79,11 @@
         </div>
       </div>
 
-      <label>
-        <span>Game name <b class="req">*</b></span>
-        <input name="game_name" type="text" required placeholder="my-game" autocomplete="off" />
-        <small id="game-name-hint">Used as the folder name in the destination repos.</small>
-      </label>
+      <input type="hidden" name="game_name" value="" />
+      <input type="hidden" name="sha256" value="" />
 
-      <label>
-        <span>Expected sha256 (optional)</span>
-        <input name="sha256" type="text" pattern="[0-9a-fA-F]{64}" placeholder="64 hex chars" autocomplete="off" />
-      </label>
-
-      <fieldset class="switches">
-        <legend>Stages</legend>
-        <label class="switch"><input type="checkbox" name="use_cache" checked /><span>Use payload cache</span></label>
-        <label class="switch"><input type="checkbox" name="run_java_decompile" checked /><span>jadx + apktool</span></label>
-        <label class="switch"><input type="checkbox" name="run_il2cpp" checked /><span>Il2CppDumper</span></label>
-        <label class="switch"><input type="checkbox" name="run_assetripper" checked /><span>AssetRipper → Unity project</span></label>
-        <label class="switch"><input type="checkbox" name="run_device_cache" /><span>Android emulator first-run cache capture</span></label>
-        <label class="switch"><input type="checkbox" name="publish_spine" checked /><span>Publish → source_spine</span></label>
-        <label class="switch"><input type="checkbox" name="publish_game_source" /><span>Publish → game_source</span></label>
-      </fieldset>
-
-      <label>
-        <span>Runner</span>
-        <select name="runner">
-          <option value="ubuntu-latest">ubuntu-latest</option>
-          <option value="ubuntu-22.04">ubuntu-22.04</option>
-          <option value="macos-latest">macos-latest</option>
-        </select>
-      </label>
-
-      <label>
-        <span>Max texture side (0 = original)</span>
-        <input name="max_texture_side" type="number" min="0" step="128" value="0" />
-      </label>
+      <input type="hidden" name="runner" value="ubuntu-latest" />
+      <input type="hidden" name="max_texture_side" value="0" />
 
       <div class="form-actions">
         <button class="btn btn-primary" type="submit" id="btn-run">▶ Dispatch pipeline</button>
@@ -126,26 +91,20 @@
       </div>
     </form>
 
-    <div class="card">
-      <h3>Latest run</h3>
-      <div id="latest-run" class="empty">No run data yet.</div>
-    </div>
-  </section>
-
-  <!-- ===================== PIPELINE ===================== -->
-  <section id="tab-pipeline" class="panel">
-    <h2>Pipeline topology</h2>
-    <p class="hint">Levels run left-to-right; boxes on the same level run in parallel.</p>
-    <div id="dag" class="dag"></div>
-
-    <div class="card">
-      <h3>Stage contracts</h3>
-      <div class="table-wrap">
-        <table id="stage-table">
-          <thead><tr><th>#</th><th>Stage</th><th>Workflow job</th><th>Input</th><th>Output</th><th>Runner</th></tr></thead>
-          <tbody></tbody>
-        </table>
+    <div class="card live" id="live" hidden>
+      <div class="live-head">
+        <div class="live-title-wrap">
+          <div id="live-title">Waiting for run…</div>
+          <div class="mono dim" id="live-sub"></div>
+        </div>
+        <div class="live-head-right">
+          <span id="live-badge" class="badge">idle</span>
+          <a id="live-link" class="btn btn-ghost btn-sm" href="#" target="_blank" rel="noopener" hidden>GitHub →</a>
+          <button id="live-new" class="btn btn-ghost btn-sm" type="button">＋ New</button>
+        </div>
       </div>
+      <div id="live-dag" class="dag dag-live"></div>
+      <div id="live-log" class="log-ticker"><span class="log-dot"></span><span id="live-log-text">waiting…</span></div>
     </div>
   </section>
 

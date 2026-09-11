@@ -74,6 +74,40 @@ export default {
       } catch (e) { return fail(e.message, e.status || 500) }
     }
 
+    // Job log tail — proxies GitHub job logs, returns last N meaningful lines.
+    // GET /api/job-log?job_id=123&tail=30
+    if (path === "job-log") {
+      const jobId = (url.searchParams.get("job_id") || "").replace(/[^\d]/g, "")
+      const tail = Math.min(Math.max(parseInt(url.searchParams.get("tail") || "30", 10) || 30, 1), 200)
+      if (!jobId) return fail("job_id required", 400)
+      if (!GITHUB_TOKEN) return fail("no GITHUB_TOKEN configured", 503)
+      try {
+        // Ask GitHub for the log URL without following the redirect with our token.
+        const head = await fetch(`${GH_API}/repos/${REPO}/actions/jobs/${jobId}/logs`, {
+          method: "GET", redirect: "manual",
+          headers: { Authorization: `Bearer ${GITHUB_TOKEN}`, Accept: "application/vnd.github+json",
+            "User-Agent": "apk2source-worker", "X-GitHub-Api-Version": "2022-11-28" },
+        })
+        if (head.status === 404) return fail("job not found or logs expired", 404)
+        if (head.status !== 302) {
+          const t = await head.text()
+          return fail(`GitHub logs status ${head.status}: ${t.slice(0, 200)}`, 502)
+        }
+        const logUrl = head.headers.get("location")
+        if (!logUrl) return fail("no log redirect from GitHub", 502)
+        // Fetch the signed log URL WITHOUT our GitHub token.
+        const lr = await fetch(logUrl, { headers: { "User-Agent": "apk2source-worker" } })
+        if (!lr.ok) return fail(`log download failed: HTTP ${lr.status}`, 502)
+        const text = await lr.text()
+        const lines = text.split("\n")
+          .map(l => l.replace(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+/, "").trimEnd())
+          .filter(l => l && !/^\s*$/.test(l))
+        const out = lines.slice(-tail)
+        return corsResponse({ ok: true, job_id: jobId, total_lines: lines.length,
+          truncated: lines.length > out.length, lines: out }, {})
+      } catch (e) { return fail(`job-log error: ${e.message}`, 500) }
+    }
+
     // Artifacts
     if (path === "artifacts") {
       const runId = url.searchParams.get("run_id")

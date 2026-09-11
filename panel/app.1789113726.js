@@ -231,7 +231,7 @@
   ];
 
   function renderDag(jobStates = {}) {
-    const dag = $("#dag");
+    const dag = $("#live-dag") || $("#dag");
     if (!dag) return;
     const levels = [...new Set(STAGES.map((s) => s.level))].sort();
     dag.innerHTML = levels.map((lv) => {
@@ -263,18 +263,125 @@
     }
   }
 
+  function matchStage(jobName) {
+    const key = (jobName || "").toLowerCase();
+    const match = STAGES.find((s) => key.includes(s.id) || key.includes(s.name.split(" ").slice(-1)[0]));
+    return match ? match.id : null;
+  }
+
   function jobStatesFromRun(run) {
     const out = {};
     if (!run || !run.jobs) return out;
     for (const j of run.jobs) {
-      const key = (j.name || "").toLowerCase();
-      const match = STAGES.find((s) => key.includes(s.id) || key.includes(s.name.split(" ").slice(-1)[0]));
-      if (!match) continue;
-      out[match.id] = j.status === "completed"
+      const id = matchStage(j.name);
+      if (!id) continue;
+      out[id] = j.status === "completed"
         ? (j.conclusion === "success" ? "ok" : j.conclusion === "skipped" ? "skip" : "fail")
         : (j.status === "in_progress" ? "run" : "wait");
     }
     return out;
+  }
+
+  // ---------------------------------------------------------------- live run tracker
+  // After dispatch the Run tab becomes a live dashboard: DAG boxes light up,
+  // the finished ones scroll left, and one short log line ticks below.
+  const live = { runId: null, timer: null };
+
+  function setLiveBadge(txt) {
+    const b = $("#live-badge");
+    if (b) { b.textContent = txt; b.className = `badge b-${txt}`; }
+  }
+
+  function setLiveLog(txt) {
+    const el = $("#live-log-text");
+    if (el) el.textContent = txt;
+  }
+
+  function pickLogLine(lines) {
+    if (!lines || !lines.length) return null;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const l = (lines[i] || "").trim();
+      if (!l || /^##\[endgroup\]/.test(l)) continue;
+      return l.length > 220 ? `${l.slice(0, 220)}…` : l;
+    }
+    return null;
+  }
+
+  function startLive(runId, runUrl, title) {
+    stopLive();
+    if (!runId) return;
+    live.runId = String(runId);
+    const card = $("#live");
+    if (card) card.hidden = false;
+    const form = $("#run-form");
+    if (form) form.hidden = true;
+    const t = $("#live-title");
+    if (t) t.textContent = title || `run #${live.runId}`;
+    const link = $("#live-link");
+    if (link) {
+      if (runUrl) { link.href = runUrl; link.hidden = false; }
+      else link.hidden = true;
+    }
+    setLiveBadge("queued");
+    setLiveLog("starting…");
+    renderDag({});
+    pollLive();
+    live.timer = setInterval(pollLive, 8000);
+  }
+
+  function stopLive() {
+    if (live.timer) clearInterval(live.timer);
+    live.timer = null;
+    live.runId = null;
+  }
+
+  function pauseLive() {
+    if (live.timer) clearInterval(live.timer);
+    live.timer = null;
+  }
+
+  async function pollLive() {
+    if (!live.runId || !state.backendOk) return;
+    try {
+      const data = await api(`/api/run/${encodeURIComponent(live.runId)}`);
+      const run = data.run || {};
+      renderDag(jobStatesFromRun(data));
+      const concl = run.conclusion || run.status || "…";
+      setLiveBadge(concl);
+      const sub = $("#live-sub");
+      if (sub) sub.textContent = `#${live.runId} · ${run.name || ""} · ${fmtDate(run.run_started_at || run.created_at)}`;
+      const jobs = data.jobs || [];
+      const active = jobs.find((j) => j.status === "in_progress")
+        || [...jobs].reverse().find((j) => ["queued", "waiting", "pending"].includes(j.status))
+        || null;
+      if (active) {
+        const stageId = matchStage(active.name);
+        if (stageId) {
+          const node = document.querySelector(`#live-dag .node[data-stage="${stageId}"]`);
+          if (node) node.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+        }
+      }
+      if (active && active.id) {
+        const steps = active.steps || [];
+        const step = steps.filter((s) => s.status === "in_progress").slice(-1)[0] || steps.slice(-1)[0];
+        const stepTxt = step ? ` · ${step.name}` : "";
+        try {
+          const log = await api(`/api/job-log?job_id=${active.id}&tail=25`);
+          const line = pickLogLine(log.lines);
+          setLiveLog(`${active.name}${stepTxt} — ${line || "running…"}`);
+        } catch {
+          setLiveLog(`${active.name}${stepTxt} — running…`);
+        }
+      } else if (run.status === "completed") {
+        const done = jobs.filter((j) => j.conclusion === "success").length;
+        setLiveLog(`finished: ${run.conclusion} · ${done}/${jobs.length} jobs ok`);
+        pauseLive();
+      } else {
+        setLiveLog("queued — waiting for runner…");
+      }
+    } catch (e) {
+      setLiveLog(`tracking error: ${e.message}`);
+    }
   }
 
   // ---------------------------------------------------------------- runs
@@ -321,12 +428,21 @@
       </tr>`;
     }).join("");
 
-    $$("[data-run]", tbody).forEach((b) => b.addEventListener("click", () => showRun(b.dataset.run)));
-    renderLatest(runs[0]);
+    $$("[data-run]", tbody).forEach((b) => b.addEventListener("click", () => {
+      const run = state.runs.find((r) => String(r.run_id || r.id) === b.dataset.run);
+      switchTab("run");
+      startLive(b.dataset.run, run && run.html_url, run && (run.display_title || run.name));
+    }));
+  }
+
+  function switchTab(name) {
+    const tab = document.querySelector(`.tab[data-tab="${name}"]`);
+    if (tab) tab.click();
   }
 
   function renderLatest(run) {
     const el = $("#latest-run");
+    if (!el) return;
     if (!run) { el.innerHTML = '<div class="empty">No run data yet.</div>'; return; }
     const concl = run.conclusion || run.status || "—";
     el.innerHTML = `
@@ -804,23 +920,44 @@
     const form = $("#run-form");
     const msg = $("#run-msg");
     const btn = $("#btn-run");
+    const liveNew = $("#live-new");
+    if (liveNew && !liveNew.dataset.bound) {
+      liveNew.dataset.bound = "1";
+      liveNew.addEventListener("click", () => {
+        stopLive();
+        const card = $("#live");
+        if (card) card.hidden = true;
+        if (form) form.hidden = false;
+        setMsg(msg, "", "");
+      });
+    }
 
     form.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       const fd = new FormData(form);
 
-      // Validate
-      const gameName = fd.get("game_name") || "";
-      if (!gameName.trim()) {
-        setMsg(msg, "Game name is required.", "err");
-        return;
-      }
-
       const hasFile = fileState.file && fileState.file.size > 0;
-      const hasUrl = !!fd.get("url");
+      const hasUrl = !!(fd.get("url") || "").trim();
       if (!hasFile && !hasUrl) {
         setMsg(msg, "Provide a Payload URL or select a file.", "err");
         return;
+      }
+
+      // Game name is auto-generated (no visible field): from filename or URL.
+      const slugify = (s) => String(s || "").replace(/\.[^/.]+$/, "")
+        .replace(/[^A-Za-z0-9._-]/g, "-").replace(/-{2,}/g, "-")
+        .replace(/^[-.]+|[-.]+$/g, "").slice(0, 80) || "game";
+      let gameName = (fd.get("game_name") || "").trim();
+      if (!gameName) {
+        if (hasFile) {
+          gameName = slugify(fileState.file.name);
+        } else {
+          try {
+            const u = new URL(fd.get("url").trim());
+            const base = u.pathname.split("/").filter(Boolean).pop() || "game";
+            gameName = slugify(decodeURIComponent(base));
+          } catch { gameName = `game-${Date.now().toString(36)}`; }
+        }
       }
 
       btn.disabled = true;
@@ -836,18 +973,18 @@
           const inputs = { url, game_name: gameName };
           if (fd.get("url_fallback")) inputs.url_fallback = fd.get("url_fallback");
           if (fd.get("sha256")) inputs.sha256 = fd.get("sha256");
-          inputs.use_cache = fd.get("use_cache") || "true";
-          inputs.run_device_cache = fd.get("run_device_cache") || "false";
-          inputs.run_java_decompile = fd.get("run_java_decompile") || "true";
-          inputs.run_il2cpp = fd.get("run_il2cpp") || "true";
-          inputs.run_assetripper = fd.get("run_assetripper") || "true";
-          inputs.publish_spine = fd.get("publish_spine") || "true";
-          inputs.publish_game_source = fd.get("publish_game_source") || "false";
-          inputs.runner = fd.get("runner") || "ubuntu-latest";
-          inputs.spine_repo = fd.get("spine_repo") || "leaopold/source_spine";
-          inputs.source_repo = fd.get("source_repo") || "leaopold/game_source";
-          inputs.max_texture_side = fd.get("max_texture_side") || "0";
-          $$('input[type=checkbox]', form).forEach((c) => { inputs[c.name] = c.checked ? "true" : "false"; });
+          // All stages on by default (no switches in UI anymore).
+          inputs.use_cache = "true";
+          inputs.run_device_cache = "true";
+          inputs.run_java_decompile = "true";
+          inputs.run_il2cpp = "true";
+          inputs.run_assetripper = "true";
+          inputs.publish_spine = "true";
+          inputs.publish_game_source = "true";
+          inputs.runner = "ubuntu-latest";
+          inputs.spine_repo = "vladleopold/source_spine";
+          inputs.source_repo = "vladleopold/game_source";
+          inputs.max_texture_side = "0";
           inputs.game_name = gameName;
           return inputs;
         };
@@ -860,13 +997,13 @@
             runFd.append("game_name", gameName);
             if (fd.get("url_fallback")) runFd.append("url_fallback", fd.get("url_fallback"));
             if (fd.get("sha256")) runFd.append("sha256", fd.get("sha256"));
-            runFd.append("use_cache", fd.get("use_cache") || "true");
-            runFd.append("run_device_cache", fd.get("run_device_cache") || "false");
-            runFd.append("run_java_decompile", fd.get("run_java_decompile") || "true");
-            runFd.append("run_il2cpp", fd.get("run_il2cpp") || "true");
-            runFd.append("run_assetripper", fd.get("run_assetripper") || "true");
-            runFd.append("publish_spine", fd.get("publish_spine") || "true");
-            runFd.append("publish_game_source", fd.get("publish_game_source") || "false");
+            runFd.append("use_cache", "true");
+            runFd.append("run_device_cache", "true");
+            runFd.append("run_java_decompile", "true");
+            runFd.append("run_il2cpp", "true");
+            runFd.append("run_assetripper", "true");
+            runFd.append("publish_spine", "true");
+            runFd.append("publish_game_source", "true");
             runFd.append("runner", fd.get("runner") || "ubuntu-latest");
             runFd.append("spine_repo", fd.get("spine_repo") || "leaopold/source_spine");
             runFd.append("source_repo", fd.get("source_repo") || "leaopold/game_source");
@@ -904,6 +1041,7 @@
             const runLink = result.run_url ? `<a href="${esc(result.run_url)}" target="_blank">Open pipeline →</a>` : "";
             setMsg(msg, `✓ Done! Pipeline dispatched. You can close this page. ${runLink}`, "ok");
             setTimeout(loadRuns, 8000);
+            startLive(result.run_id, result.run_url, gameName);
           } catch (e) {
             setMsg(msg, `Error: ${e.message}`, "err");
           } finally {
@@ -926,6 +1064,7 @@
           const runLink = r.run_url ? `<a href="${esc(r.run_url)}" target="_blank">Open pipeline →</a>` : "";
           setMsg(msg, `✓ Done! Pipeline dispatched. You can close this page. ${runLink}`, "ok");
           setTimeout(loadRuns, 8000);
+          startLive(r.run_id, r.run_url, gameName);
         } catch (e) {
           setMsg(msg, `Error: ${e.message}`, "err");
         } finally {
@@ -934,13 +1073,22 @@
         return;
       }
 
-      // --- URL MODE: dispatch pipeline directly ---
-      const inputs = {};
-      for (const [k, v] of fd.entries()) {
-        if (v === "") continue;
-        inputs[k] = v;
-      }
-      $$('input[type=checkbox]', form).forEach((c) => { inputs[c.name] = c.checked ? "true" : "false"; });
+      // --- URL MODE: dispatch pipeline directly (all stages on) ---
+      const inputs = {
+        url: (fd.get("url") || "").trim(),
+        game_name: gameName,
+        use_cache: "true",
+        run_device_cache: "true",
+        run_java_decompile: "true",
+        run_il2cpp: "true",
+        run_assetripper: "true",
+        publish_spine: "true",
+        publish_game_source: "true",
+        runner: "ubuntu-latest",
+        spine_repo: "vladleopold/source_spine",
+        source_repo: "vladleopold/game_source",
+        max_texture_side: "0",
+      };
 
       setMsg(msg, "Dispatching pipeline…");
       try {
@@ -948,6 +1096,7 @@
           const r = await api("/api/trigger", { method: "POST", body: { workflow: "pipeline.yml", inputs } });
           setMsg(msg, `Dispatched. ${r.run_url ? `<a href="${esc(r.run_url)}" target="_blank">Open pipeline →</a>` : "Check History tab."}`, "ok");
           setTimeout(loadRuns, 8000);
+          startLive(r.run_id, r.run_url, inputs.game_name);
         } else {
           const url = `https://github.com/${REPO}/actions/workflows/pipeline.yml`;
           window.open(url, "_blank");
