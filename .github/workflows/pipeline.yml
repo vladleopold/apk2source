@@ -412,10 +412,10 @@ jobs:
         with:
           api-level: ${{ matrix.api }}
           arch: ${{ matrix.arch }}
-          force-avd-creation: false
+          force-avd-creation: true
           emulator-boot-timeout: 240
           disable-linux-hw-accel: true
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: false
           script: echo "AVD ready"
 
@@ -427,7 +427,7 @@ jobs:
           force-avd-creation: false
           emulator-boot-timeout: 240
           disable-linux-hw-accel: true
-          emulator-options: -no-snapshot-save -no-snapshot-storage -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          emulator-options: -no-window -no-snapshot -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
           script: |
             set -euo pipefail
