@@ -443,6 +443,67 @@ jobs:
             fi
             python -m apk2source.cli device-cache --splits "$WORK/unpacked/splits" --out "$WORK/device-cache" --work "$WORK" --package "${{ steps.unpack.outputs.package }}" --settle 900 --skip-install
 
+      - name: "Stage 03b - extract encryption keys from libReturnToMonkeyIsland.so"
+        run: |
+          set -euo pipefail
+          LIB="$(find "$WORK/unpacked/merged/lib" -name 'libReturnToMonkeyIsland.so' | head -1)"
+          if [ -z "$LIB" ]; then
+            echo "::warning::libReturnToMonkeyIsland.so not found - cannot extract keys"
+            exit 0
+          fi
+          mkdir -p "$WORK/keys"
+          python3 - "$LIB" "$WORK/keys" <<'PY'
+          import sys, os
+          data = open(sys.argv[1], "rb").read()
+          outdir = sys.argv[2]
+          os.makedirs(outdir, exist_ok=True)
+          patterns = [
+              (bytes([0xF7,0xEC,0x7E,0xB6,0xE3,0x42,0x5C,0x36,0x55,0x5E,0xA2,0x97,0xC0,0x1E,0xBE,0x2C]), 65536, "key1.bin"),
+              (bytes([0xD5,0x7D,0xFB,0x4D,0x51,0xF5,0x5E,0xF4,0xAA,0x0B,0x8A,0x7E,0x00,0x8D,0xCB,0x66]), 256, "key2.bin"),
+              (bytes([0x1F,0xB5,0xD6,0xE7,0xA2,0x88,0x8D,0x75,0xC1,0xC4,0xB9,0x6B,0x03,0x04,0x56,0xD3]), 1024, "key3.bin"),
+          ]
+          for pat, length, name in patterns:
+              pos = data.find(pat)
+              if pos == -1:
+                  print(f"::warning::pattern for {name} not found")
+                  continue
+              with open(os.path.join(outdir, name), "wb") as f:
+                  f.write(data[pos:pos+length])
+              print(f"{name}: {length} bytes at {pos}")
+          PY
+
+      - name: "Stage 03c - install Rust and build ggtool"
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          cd "$RUNNER_TEMP"
+          git clone --depth 1 https://github.com/jonsth131/ggtool.git
+          cd ggtool
+          cargo build --release
+          echo "GGTOOL=$RUNNER_TEMP/ggtool/target/release/ggtool" >> "$GITHUB_ENV"
+
+      - name: "Stage 03d - unpack .ggpack files with ggtool"
+        run: |
+          set -euo pipefail
+          GGPACK_DIR="$WORK/device-cache/cache"
+          OUTDIR="$WORK/ggpack-extracted"
+          mkdir -p "$OUTDIR"
+          WORKDIR="$RUNNER_TEMP/ggtool-run"
+          mkdir -p "$WORKDIR/keys"
+          cp "$WORK/keys"/*.bin "$WORKDIR/keys/" 2>/dev/null || true
+          cd "$WORKDIR"
+          echo "=== .ggpack files found ==="
+          find "$GGPACK_DIR" -name '*.ggpack*' -type f
+          find "$GGPACK_DIR" -name '*.ggpack*' -type f | while read -r pack; do
+            base="$(basename "$pack")"
+            echo ">>> Extracting $pack -> $OUTDIR/$base"
+            mkdir -p "$OUTDIR/$base"
+            "$GGTOOL" extract-files "$pack" "*" "$OUTDIR/$base" || echo "::warning::failed to extract $pack"
+          done
+          echo "=== extracted tree ==="
+          find "$OUTDIR" -type f | head -40
+
       - name: Upload captured cache
         if: always()
         uses: actions/upload-artifact@v4
@@ -451,6 +512,16 @@ jobs:
           path: |
             ${{ env.WORK }}/device-cache/meta/**
             ${{ env.WORK }}/device-cache/cache/**
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload ggpack-extracted
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ggpack-extracted
+          path: |
+            ${{ env.WORK }}/ggpack-extracted/**
           retention-days: 14
           if-no-files-found: warn
 
@@ -668,6 +739,12 @@ jobs:
           path: device-cache
         continue-on-error: true
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: ggpack-extracted
+          path: ggpack-extracted
+        continue-on-error: true
+
       - name: Extract Unity + Spine from captured runtime files
         run: |
           set -euo pipefail
@@ -687,6 +764,15 @@ jobs:
           apk2source extract-spine --assets device-cache --out "$WORK/spine-device-raw" \
             --game "${{ needs.plan.outputs.game_slug }}" \
             --package "${{ needs.heavy.outputs.package }}" --work "$WORK" || true
+          # Scan ggpack-extracted tree (ggtool unpacked .ggpack -> spine files)
+          if [ -d ggpack-extracted ] && [ -n "$(find ggpack-extracted -type f | head -1)" ]; then
+            echo "=== ggpack-extracted tree ==="
+            find ggpack-extracted -type f | head -40
+            apk2source extract-spine --assets ggpack-extracted --out "$WORK/spine-device-ggpack" \
+              --game "${{ needs.plan.outputs.game_slug }}" \
+              --package "${{ needs.heavy.outputs.package }}" --work "$WORK" || true
+            cp -rn "$WORK/spine-device-ggpack/." "$WORK/spine-device/" 2>/dev/null || true
+          fi
           mkdir -p "$WORK/spine-device"
           cp -rn "$WORK/spine-device-raw/." "$WORK/spine-device/" 2>/dev/null || true
           echo "--- device spine tree ---"
