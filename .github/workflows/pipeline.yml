@@ -430,9 +430,18 @@ jobs:
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
           script: |
+            set -euo pipefail
             adb wait-for-device
             adb shell settings put global window_animation_scale 0
-            python -m apk2source.cli device-cache --splits "$WORK/unpacked/splits" --out "$WORK/device-cache" --work "$WORK" --package "${{ steps.unpack.outputs.package }}" --settle 900
+            # Install base APK manually before device-cache
+            BASE_APK="$(find "$WORK/unpacked" -name 'base.apk' -o -name '*.apk' | head -1)"
+            if [ -n "$BASE_APK" ]; then
+              echo "Installing $BASE_APK"
+              adb install -r "$BASE_APK" || echo "::warning::install failed, continuing anyway"
+            else
+              echo "::warning::no base APK found, skipping install"
+            fi
+            python -m apk2source.cli device-cache --splits "$WORK/unpacked/splits" --out "$WORK/device-cache" --work "$WORK" --package "${{ steps.unpack.outputs.package }}" --settle 900 --skip-install
 
       - name: Upload captured cache
         if: always()
