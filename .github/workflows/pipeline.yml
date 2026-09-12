@@ -419,7 +419,7 @@ jobs:
           disable-animations: false
           script: echo "AVD ready"
 
-      - name: "Stage 03 - install, first-run, capture cache"
+- name: "Stage 03 - install, first-run, capture cache"
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api }}
