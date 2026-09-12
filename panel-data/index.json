@@ -2,6 +2,29 @@
   "schema": 1,
   "runs": [
     {
+      "run_id": "34699405924",
+      "game": "Return-to-Monkey-Island",
+      "generated_iso": "2026-09-12T15:03:29Z",
+      "summary": {
+        "engine": null,
+        "unity_version": null,
+        "payload_size": null,
+        "payload_size_human": null,
+        "payload_sha256": null,
+        "cached": null,
+        "package": null,
+        "skeletons": 0,
+        "skeletons_complete": 0,
+        "textures": 0,
+        "spine_bytes": 0,
+        "unity_files": 0,
+        "unity_files_ok": 0,
+        "device_cache_files": 0,
+        "device_cache_bytes": 0,
+        "published": false
+      }
+    },
+    {
       "run_id": "34698362276",
       "game": "Return-to-Monkey-Island",
       "generated_iso": "2026-09-12T14:24:10Z",
