@@ -404,7 +404,12 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-${{ matrix.api }}-${{ matrix.arch }}-v2
+          key: avd-${{ matrix.api }}-${{ matrix.arch }}-v3
+
+      - name: Wipe any stale AVD
+        run: |
+          rm -rf ~/.android/avd/*
+          echo "AVD wiped"
 
       - name: Create AVD and generate snapshot
         if: steps.avd-cache.outputs.cache-hit != 'true'
@@ -412,7 +417,7 @@ jobs:
         with:
           api-level: ${{ matrix.api }}
           arch: ${{ matrix.arch }}
-          force-avd-creation: false
+          force-avd-creation: true
           emulator-boot-timeout: 900
           disable-linux-hw-accel: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
