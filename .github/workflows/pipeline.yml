@@ -424,11 +424,10 @@ jobs:
         with:
           api-level: ${{ matrix.api }}
           arch: ${{ matrix.arch }}
-          force-avd-creation: false
-          wipe-data: true
+          force-avd-creation: true
           emulator-boot-timeout: 1800
           disable-linux-hw-accel: true
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          emulator-options: -no-snapshot-save -no-snapshot-storage -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
           script: |
             set -euo pipefail
