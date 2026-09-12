@@ -404,7 +404,7 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-${{ matrix.api }}-${{ matrix.arch }}-v4
+          key: avd-${{ matrix.api }}-${{ matrix.arch }}-v5
 
       - name: Create AVD and generate snapshot
         if: steps.avd-cache.outputs.cache-hit != 'true'
@@ -412,8 +412,8 @@ jobs:
         with:
           api-level: ${{ matrix.api }}
           arch: ${{ matrix.arch }}
-          force-avd-creation: true
-          emulator-boot-timeout: 900
+          force-avd-creation: false
+          emulator-boot-timeout: 240
           disable-linux-hw-accel: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: false
@@ -425,13 +425,25 @@ jobs:
           api-level: ${{ matrix.api }}
           arch: ${{ matrix.arch }}
           force-avd-creation: false
-          emulator-boot-timeout: 1800
+          emulator-boot-timeout: 240
           disable-linux-hw-accel: true
           emulator-options: -no-snapshot-save -no-snapshot-storage -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
           script: |
             set -euo pipefail
-            adb wait-for-device
+            # Bounded wait: fail fast if emulator never boots.
+            for i in $(seq 1 120); do
+              if adb get-state 2>/dev/null | grep -q device; then
+                echo "ADB device ready after ${i} attempts"
+                break
+              fi
+              sleep 2
+              if [ "$i" = "120" ]; then
+                echo "::error::emulator did not boot within 240s"
+                adb devices 2>&1 || true
+                exit 1
+              fi
+            done
             adb shell settings put global window_animation_scale 0
             # Install base APK manually before device-cache
             BASE_APK="$(find "$WORK/unpacked" -name 'base.apk' -o -name '*.apk' | head -1)"
@@ -441,7 +453,7 @@ jobs:
             else
               echo "::warning::no base APK found, skipping install"
             fi
-            python -m apk2source.cli device-cache --splits "$WORK/unpacked/splits" --out "$WORK/device-cache" --work "$WORK" --package "${{ steps.unpack.outputs.package }}" --settle 900 --skip-install
+            python -m apk2source.cli device-cache --splits "$WORK/unpacked/splits" --out "$WORK/device-cache" --work "$WORK" --package "${{ steps.unpack.outputs.package }}" --settle 300 --skip-install
 
       - name: "Stage 03b - extract encryption keys from libReturnToMonkeyIsland.so"
         run: |
