@@ -404,7 +404,7 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-${{ matrix.api }}-${{ matrix.arch }}
+          key: avd-${{ matrix.api }}-${{ matrix.arch }}-v2
 
       - name: Create AVD and generate snapshot
         if: steps.avd-cache.outputs.cache-hit != 'true'
@@ -425,7 +425,8 @@ jobs:
           api-level: ${{ matrix.api }}
           arch: ${{ matrix.arch }}
           force-avd-creation: false
-          emulator-boot-timeout: 900
+          wipe-data: true
+          emulator-boot-timeout: 1800
           disable-linux-hw-accel: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
